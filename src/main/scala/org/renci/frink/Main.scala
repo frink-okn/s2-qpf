@@ -14,6 +14,6 @@ object Main extends OxApp.Simple:
 
   def run(using Ox): Unit =
     val port = sys.env.get("HTTP_PORT").flatMap(_.toIntOption).getOrElse(8080)
-    val binding = useInScope(NettySyncServer().port(port).addEndpoints(Endpoints.all).start())(_.stop())
+    val binding = useInScope(NettySyncServer().host("0.0.0.0").port(port).addEndpoints(Endpoints.all).start())(_.stop())
     println(s"Server started at http://localhost:${binding.port}. ")
     never
