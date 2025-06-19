@@ -6,7 +6,7 @@
 
 ## Running
 
-- Provide server location in `QPF_SERVER_LOCATION` environment variable (e.g., `http://localhost:8080)
+- Provide server location in `QPF_SERVER_LOCATION` environment variable (e.g., `http://localhost:8080`)
 
 ## Developer quick start
 
