@@ -1,0 +1,25 @@
+name: Scala CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: scala-cli-setup-action
+      uses: VirtusLab/scala-cli-setup@v1.8.1
+      with:
+        jvm: temurin:21
+        power: true
+    - name: Run tests
+      run: scala-cli --power test .
