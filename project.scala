@@ -1,6 +1,6 @@
 //> using publish.organization org.renci.frink
 //> using publish.name s2-qpf
-//> using publish.version 0.1.0-SNAPSHOT
+//> using publish.version 1.0.0
 
 //> using scala 3.6.3
 //> using dep com.softwaremill.sttp.tapir::tapir-netty-server-sync:1.11.34
