@@ -35,6 +35,14 @@ docker run -ti --rm -p '8080:8080' -v $(pwd):/app virtuslab/scala-cli run /app #
 
 For more details check the [Scala CLI commands](https://scala-cli.virtuslab.org/docs/commands/basics) page.
 
+## Packaging
+
+Create executable that automatically downloads dependencies; requires JVM 21+ on PATH:
+
+```shell
+scala-cli --power package . -o s2-qpf
+```
+
 ## Links:
 
 - [tapir documentation](https://tapir.softwaremill.com/en/latest/)
