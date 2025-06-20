@@ -4,6 +4,8 @@
 - [Quad Pattern Fragments](https://linkeddatafragments.org/specification/quad-pattern-fragments/)
 - [Linked Data Fragments](https://linkeddatafragments.org/)
 
+**Live server:** https://frink.apps.renci.org/s2/qpf
+
 ## Running
 
 - Provide server location in `QPF_SERVER_LOCATION` environment variable (e.g., `http://localhost:8080`)
