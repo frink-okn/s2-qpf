@@ -24,7 +24,7 @@ object S2Graph:
 
   def s2CellIRI(cell: S2CellId): String = s"$S2Prefix${cell.level()}.${Long.toUnsignedString(cell.id())}"
 
-  def quads(pattern: Quad, offset: Int = 0): SizedIterator[Quad] =
+  def quads(pattern: Quad): SizedIterator[Quad] =
     val rels = toS2Relations(pattern.getPredicate())
     val subj = toS2Cell(pattern.getSubject())
     val obj = toS2Cell(pattern.getObject())
@@ -58,7 +58,7 @@ object S2Graph:
               for
                 level <- levels
                 if level > subjectCell.level()
-              yield ContainmentIterator(subjectCell, level, true, offset, toContainsQuad)
+              yield ContainmentIterator(subjectCell, level, true, 0, toContainsQuad)
             else Vector.empty
           val withinQuads =
             if rels(Within) && levels.contains(subjectCell.level()) then
@@ -73,7 +73,7 @@ object S2Graph:
               for
                 level <- levels
                 if level > objectCell.level()
-              yield ContainmentIterator(objectCell, level, true, offset, toWithinQuad)
+              yield ContainmentIterator(objectCell, level, true, 0, toWithinQuad)
             else Vector.empty
           val containsQuads =
             if rels(Contains) && levels.contains(objectCell.level()) then
@@ -91,7 +91,7 @@ object S2Graph:
             else None
           SingleSizedIterator(quad.iterator, quad.size)
 
-      mainIterator.drop(offset)
+      mainIterator
 
   def toS2Cell(node: Node): Option[S2CellId] =
     if node.isURI() then
