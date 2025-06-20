@@ -145,7 +145,10 @@ object WebUI:
             ", funded by ",
             a(href := "https://www.nsf.gov/awardsearch/showAward?AWD_ID=2333810")("NSF award 2333810"),
             " to ",
-            a(href := "https://renci.org")("RENCI", ".")
+            a(href := "https://renci.org")("RENCI", ". "),
+            "Source on ",
+            a(href := "https://github.com/frink-okn/s2-qpf")("GitHub"),
+            "."
           )
         )
       ).toString
