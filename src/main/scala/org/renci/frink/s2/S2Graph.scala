@@ -3,6 +3,7 @@ package org.renci.frink.s2
 import com.google.common.geometry.S2Cell
 import com.google.common.geometry.S2CellId
 import com.google.common.geometry.S2LatLng
+import com.google.common.geometry.S2Point
 import com.google.common.geometry.S2Projections
 import org.apache.jena.datatypes.TypeMapper
 import org.apache.jena.datatypes.xsd.XSDDatatype
@@ -126,15 +127,75 @@ object S2Graph:
       AsWKTNode -> NodeFactory.createLiteralDT(wkt(cell), WKTLiteral)
     ).map((p, o) => Quad.create(graph, subject, p, o))
 
-  /** The cell's vertices as a closed longitude/latitude ring. This does not faithfully represent very large cells, or cells crossing the
-    * antimeridian or containing a pole.
+  /** The polygon formed from the cell's vertices, with edges that are straight in longitude and latitude, so very large cells are only
+    * roughly represented. A cell with a pole on its boundary or inside it reaches the pole along latitude ±90, and a cell crossing the
+    * antimeridian is split into a MULTIPOLYGON.
     */
   def wkt(cell: S2CellId): String =
-    val s2Cell = S2Cell(cell)
-    val vertices = (0 until 4).map(i => S2LatLng(s2Cell.getVertex(i)))
-    (vertices :+ vertices.head)
-      .map(vertex => s"${plainDecimal(vertex.lngDegrees())} ${plainDecimal(vertex.latDegrees())}")
-      .mkString("POLYGON ((", ", ", "))")
+    def ring(points: Seq[LngLat]) =
+      (points :+ points.head).map((lng, lat) => s"${plainDecimal(lng)} ${plainDecimal(lat)}").mkString("(", ", ", ")")
+    lngLatRings(S2Cell(cell)) match
+      case Seq(single) => s"POLYGON (${ring(single)})"
+      case parts       => parts.map(part => s"(${ring(part)})").mkString("MULTIPOLYGON (", ", ", ")")
+
+  private type LngLat = (Double, Double)
+
+  /** The cell's boundary as counterclockwise rings of longitude/latitude points within ±180 degrees, not repeating the first point */
+  private def lngLatRings(cell: S2Cell): Seq[Seq[LngLat]] =
+    val vertices = (0 until 4).map(cell.getVertex)
+    def isPole(point: S2Point) = point.getX() == 0 && point.getY() == 0
+    val interiorPole = Seq(S2Point(0, 0, 1), S2Point(0, 0, -1)).find(cell.contains).filterNot(_ => vertices.exists(isPole))
+    interiorPole match
+      case Some(pole) =>
+        // Only the two polar faces contain a pole without it being a vertex. Their vertices are in longitude order around the pole.
+        val north = pole.getZ() > 0
+        val ordered = vertices
+          .map(S2LatLng(_))
+          .map(vertex => (vertex.lngDegrees(), vertex.latDegrees()))
+          .sortBy((lng, _) => if north then lng else -lng)
+        val antimeridian = if north then 180.0 else -180.0
+        val poleLat = if north then 90.0 else -90.0
+        val (lastLng, lastLat) = ordered.last
+        val (firstLng, firstLat) = ordered.head
+        val crossingLat = lastLat + (firstLat - lastLat) * (antimeridian - lastLng) / (firstLng + 2 * antimeridian - lastLng)
+        Seq(ordered ++ Seq((antimeridian, crossingLat), (antimeridian, poleLat), (-antimeridian, poleLat), (-antimeridian, crossingLat)))
+      case None =>
+        // Vertices on the antimeridian may be at either 180 or -180 degrees, so keep every vertex on the side of the cell's center
+        val center = S2LatLng(cell.getCenter()).lngDegrees()
+        def unwrap(lng: Double) = if lng - center > 180 then lng - 360 else if lng - center < -180 then lng + 360 else lng
+        val ring = vertices.indices.flatMap { i =>
+          val vertex = vertices(i)
+          if isPole(vertex) then
+            val lat = if vertex.getZ() > 0 then 90.0 else -90.0
+            Seq(vertices((i + 3) % 4), vertices((i + 1) % 4)).map(neighbor => (unwrap(S2LatLng(neighbor).lngDegrees()), lat))
+          else
+            val latLng = S2LatLng(vertex)
+            Seq((unwrap(latLng.lngDegrees()), latLng.latDegrees()))
+        }
+        splitAtAntimeridian(ring)
+
+  private def splitAtAntimeridian(ring: Seq[LngLat]): Seq[Seq[LngLat]] =
+    def shift(points: Seq[LngLat], degrees: Double) = points.map((lng, lat) => (lng + degrees, lat))
+    val lngs = ring.map(_._1)
+    if lngs.max > 180 then Seq(clip(ring, 180, keepWest = true), shift(clip(ring, 180, keepWest = false), -360))
+    else if lngs.min < -180 then Seq(clip(ring, -180, keepWest = false), shift(clip(ring, -180, keepWest = true), 360))
+    else Seq(ring)
+
+  /** The part of a ring on one side of a meridian (Sutherland-Hodgman clipping) */
+  private def clip(ring: Seq[LngLat], meridian: Double, keepWest: Boolean): Seq[LngLat] =
+    def inside(point: LngLat) = if keepWest then point._1 <= meridian else point._1 >= meridian
+    def crossing(a: LngLat, b: LngLat): LngLat = (meridian, a._2 + (b._2 - a._2) * (meridian - a._1) / (b._1 - a._1))
+    val clipped = ring.indices.flatMap { i =>
+      val previous = ring((i + ring.size - 1) % ring.size)
+      val current = ring(i)
+      (inside(previous), inside(current)) match
+        case (true, true)   => Seq(current)
+        case (false, true)  => Seq(crossing(previous, current), current)
+        case (true, false)  => Seq(crossing(previous, current))
+        case (false, false) => Seq.empty
+    }
+    // a vertex on the meridian is also produced as a crossing
+    clipped.zip(clipped.drop(1) :+ clipped.head).collect { case (point, next) if point != next => point }
 
   private def plainDecimal(value: Double): String = java.math.BigDecimal(value.toString).toPlainString()
 
@@ -203,25 +264,28 @@ object S2Graph:
 
   private val CellLabel = """S2 Cell at level \d+ with ID (\d+)""".r
   private val GeometryLabel = """Geometry of the polygon formed from the vertices of the S2 Cell at level \d+ with ID (\d+)""".r
-  private val WKTRing = """POLYGON \(\((.+)\)\)""".r
+  private val WKTCoordinates = """(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)""".r
 
   /** Cells whose descriptions may contain an object other than a class. The object still needs to be checked against the description. */
   private def cellsNamedBy(obj: Node): Seq[S2CellId] =
     if obj.isURI() then toGeometryCell(obj).toSeq
     else if obj.isLiteral() then
       obj.getLiteralLexicalForm() match
-        case CellLabel(id)     => parseCellID(id).toSeq
-        case GeometryLabel(id) => parseCellID(id).toSeq
-        case WKTRing(ring)     => cellsContainingRingCenter(ring)
-        case id                => parseCellID(id).toSeq
+        case CellLabel(id)                                                      => parseCellID(id).toSeq
+        case GeometryLabel(id)                                                  => parseCellID(id).toSeq
+        case wkt if wkt.startsWith("POLYGON") || wkt.startsWith("MULTIPOLYGON") => cellsContainingCentroid(wkt)
+        case id                                                                 => parseCellID(id).toSeq
     else Seq.empty
 
-  /** The cells, one per level, containing the center of a ring of four cell vertices */
-  private def cellsContainingRingCenter(ring: String): Seq[S2CellId] =
-    val vertices = ring.split(", ").toSeq.map(_.split(" ").toSeq.flatMap(_.toDoubleOption))
-    if vertices.size == 5 && vertices.forall(_.size == 2) then
-      val center = vertices.take(4).map(vertex => S2LatLng.fromDegrees(vertex(1), vertex(0)).toPoint()).reduce(_.add(_)).normalize()
-      val leaf = S2CellId.fromPoint(center)
+  /** The cells, one per level, containing the centroid of the points in a cell geometry. The points are on or inside the cell's boundary,
+    * so their centroid is inside the cell.
+    */
+  private def cellsContainingCentroid(wkt: String): Seq[S2CellId] =
+    val points =
+      WKTCoordinates.findAllMatchIn(wkt).map(point => S2LatLng.fromDegrees(point.group(2).toDouble, point.group(1).toDouble).toPoint())
+    val centroid = points.foldLeft(S2Point(0, 0, 0))(_.add(_))
+    if centroid.norm2() > 0 then
+      val leaf = S2CellId.fromPoint(centroid.normalize())
       Levels.map(level => leaf.parent(level))
     else Seq.empty
 

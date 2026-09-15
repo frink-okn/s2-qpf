@@ -37,7 +37,11 @@ object Types:
   object Term:
     def parse(value: String): Try[Term] =
       if value.startsWith("?") then Success(Variable(value.drop(1)))
-      else if value.startsWith("\"") then parseLiteral(value)
+      else if value.startsWith("\"") then
+        // Jena rejects some literals, such as those with malformed language tags
+        parseLiteral(value).flatMap(literal =>
+          Try(toNode(literal)).map(_ => literal).orElse(Failure(Exception(s"Invalid literal: $value")))
+        )
       else if value.startsWith("_") then Failure(Exception("Blank nodes are not allowed"))
       else Success(IRI(value))
 

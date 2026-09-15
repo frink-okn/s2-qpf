@@ -21,6 +21,8 @@ class TermSpec extends AnyFlatSpec with Matchers:
     Term.parse("\"abc").isFailure shouldBe true
     Term.parse("\"abc\"x").isFailure shouldBe true
     Term.parse("_:b0").isFailure shouldBe true
+    Term.parse("\"hello\"@en_US").isFailure shouldBe true
+    Term.parse("\"hello\"@en-US").get shouldBe Term.Literal("hello", None, Some("en-US"))
   }
 
   it should "round trip literal nodes" in {

@@ -1,6 +1,8 @@
 package org.renci.frink.s2
 
+import com.google.common.geometry.S2Cell
 import com.google.common.geometry.S2CellId
+import com.google.common.geometry.S2LatLng
 import org.apache.jena.datatypes.xsd.XSDDatatype
 import org.apache.jena.graph.Node
 import org.apache.jena.graph.NodeFactory
@@ -20,6 +22,16 @@ class S2GraphSpec extends AnyFlatSpec with Matchers:
     Quad.create(g, s, p, o)
   private def objects(quads: Seq[Quad], predicate: Node) = quads.filter(_.getPredicate() == predicate).map(_.getObject()).toSet
   private def matching(queried: Quad) = S2Graph.quads(queried).fold(reason => fail(reason), identity)
+
+  /** Longitude/latitude rings of a POLYGON or MULTIPOLYGON */
+  private def rings(wkt: String): Seq[Seq[(Double, Double)]] =
+    """\(([-\d. ,]+)\)""".r
+      .findAllMatchIn(wkt)
+      .map(_.group(1).split(", ").toSeq.map(_.split(" ") match { case Array(lng, lat) => (lng.toDouble, lat.toDouble) }))
+      .toSeq
+
+  private def contains(ring: Seq[(Double, Double)], x: Double, y: Double): Boolean =
+    ring.zip(ring.tail).count { case ((x1, y1), (x2, y2)) => (y1 > y) != (y2 > y) && x < x1 + (y - y1) * (x2 - x1) / (y2 - y1) } % 2 == 1
 
   // A York County, Maine cell from SAWGraph spatialkg v0.0.6
   private val yorkCell = cellIRI(13, "5525166171478818816")
@@ -87,6 +99,37 @@ class S2GraphSpec extends AnyFlatSpec with Matchers:
     matching(pattern(o = NodeFactory.createLiteralDT("05525166171478818816", XSDDatatype.XSDinteger))).size shouldBe 0
     matching(pattern(o = NodeFactory.createLiteralString("S2 Cell at level 12 with ID 5525166171478818816"))).size shouldBe 0
     matching(pattern(s = variable("s"), o = yorkGeometry)).iterator.map(_.getSubject()).toSet shouldBe Set(yorkCell)
+  }
+
+  it should "write valid geometry for every cell, including at the poles and the antimeridian" in {
+    val random = scala.util.Random(13)
+    val edgeCases =
+      for
+        level <- Seq(1, 13, 30)
+        (lat, lng) <- Seq(90.0 -> 45.0, -90.0 -> -45.0, 10.0 -> 179.99999, 10.0 -> -179.99999, 89.99999 -> 180.0, -89.99999 -> -179.99999)
+      yield S2CellId.fromLatLng(S2LatLng.fromDegrees(lat, lng)).parent(level)
+    val randomCells = (1 to 500).map(_ =>
+      S2CellId.fromLatLng(S2LatLng.fromDegrees(random.between(-90.0, 90.0), random.between(-180.0, 180.0))).parent(random.between(4, 31))
+    )
+    val cells = (0 to 3).flatMap(cellsAt(_).iterator) ++ edgeCases ++ randomCells
+    for cell <- cells do
+      val literal = wkt(cell)
+      withClue(s"level ${cell.level()} $literal: ") {
+        val polygons = rings(literal)
+        polygons should not be empty
+        for ring <- polygons do
+          ring.head shouldBe ring.last
+          ring.forall((lng, lat) => lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90) shouldBe true
+          // counterclockwise, with some area, measured from the first point to keep precision for tiny cells
+          val (x0, y0) = ring.head
+          ring.zip(ring.tail).map { case ((x1, y1), (x2, y2)) => (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0) }.sum should be > 0.0
+        val inside = S2LatLng(S2Cell(if cell.level() < 30 then cell.child(0) else cell).getCenter())
+        polygons.exists(ring => contains(ring, inside.lngDegrees(), inside.latDegrees())) shouldBe true
+        val lookup = matching(pattern(p = AsWKTNode, o = NodeFactory.createLiteralDT(literal, WKTLiteral)))
+        lookup.iterator.map(_.getSubject()).toSeq shouldBe Seq(iri(geometryIRI(cell)))
+      }
+    wkt(S2CellId.fromFace(2)) should include("180.0 90.0, -180.0 90.0")
+    wkt(S2CellId.fromFace(3)) should startWith("MULTIPOLYGON")
   }
 
   it should "find cells from their area at coarse levels" in {
