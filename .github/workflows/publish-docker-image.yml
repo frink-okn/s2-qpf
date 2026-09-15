@@ -41,7 +41,7 @@ jobs:
         power: true
     
     - name: Build Docker image
-      run: scala-cli --power package --docker . --docker-from openjdk:21-jdk --docker-image-repository ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}
+      run: scala-cli --power package --docker . --docker-from eclipse-temurin:21-jre --docker-image-repository ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}
 
     - name: Tag Docker image
       run: docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}:latest ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}:${{  github.ref_name }}
