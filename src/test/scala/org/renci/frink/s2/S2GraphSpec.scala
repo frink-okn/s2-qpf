@@ -9,6 +9,8 @@ import org.apache.jena.graph.NodeFactory
 import org.apache.jena.sparql.core.Quad
 import org.apache.jena.vocabulary.RDF.Nodes as RDF
 import org.apache.jena.vocabulary.RDFS.Nodes as RDFS
+import org.renci.frink.qpf.Bindings
+import org.renci.frink.qpf.QuadPatternFragment.UnionGraph
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -22,6 +24,8 @@ class S2GraphSpec extends AnyFlatSpec with Matchers:
     Quad.create(g, s, p, o)
   private def objects(quads: Seq[Quad], predicate: Node) = quads.filter(_.getPredicate() == predicate).map(_.getObject()).toSet
   private def matching(queried: Quad) = S2Graph.quads(queried).fold(reason => fail(reason), identity)
+  private def restricted(queried: Quad, values: String) =
+    S2Graph.quads(queried, Bindings.parse(values).get).fold(reason => fail(reason), identity)
 
   /** Longitude/latitude rings of a POLYGON or MULTIPOLYGON */
   private def rings(wkt: String): Seq[Seq[(Double, Double)]] =
@@ -177,7 +181,8 @@ class S2GraphSpec extends AnyFlatSpec with Matchers:
       pattern(o = GeometryClass),
       pattern(p = HasMetricAreaNode, g = Graphs(30)),
       pattern(s = yorkCell, p = WithinNode, o = cellIRI(12, "5525166119939211264")),
-      pattern(s = yorkCell, g = Graphs(12))
+      pattern(s = yorkCell, g = Graphs(12)),
+      pattern(s = yorkCell, p = TouchesNode, g = UnionGraph)
     )
     for
       queried <- patterns
@@ -293,4 +298,80 @@ class S2GraphSpec extends AnyFlatSpec with Matchers:
     val connected = matching(pattern(p = ConnectedToNode, g = Graphs(9))).size
     val parts = Seq(WithinNode, ContainsNode, TouchesNode).map(p => matching(pattern(p = p, g = Graphs(9))).size)
     connected shouldBe parts.sum
+  }
+
+  it should "match nothing when a variable is in more than one position" in {
+    matching(pattern(s = variable("x"), o = variable("x"))).size shouldBe 0
+    matching(pattern(s = variable("x"), g = variable("x"))).size shouldBe 0
+    matching(pattern(p = variable("x"), o = variable("x"))).size shouldBe 0
+  }
+
+  it should "answer each quad compatible with several bindings once" in {
+    val neighbor = cellIRI(13, "5525166068399603712")
+    val queried = pattern(p = TouchesNode)
+    val values =
+      s"(?s ?o ?unrelated) { (<${yorkCell.getURI()}> UNDEF UNDEF) (UNDEF <${neighbor.getURI()}> 1) (<${yorkCell.getURI()}> UNDEF 2) }"
+    val expected =
+      (matching(pattern(s = yorkCell, p = TouchesNode)).iterator ++ matching(pattern(p = TouchesNode, o = neighbor)).iterator).toSet
+    val matches = restricted(queried, values)
+    matches.exact shouldBe false
+    matches.positions.size shouldBe 16
+    val answered = restricted(queried, values).positions.iterator.flatten.toVector
+    answered.distinct shouldBe answered
+    answered.toSet shouldBe expected
+    answered.size shouldBe 15
+    for offset <- 0 to 16 do
+      restricted(queried, values).positions.drop(offset).iterator.toVector shouldBe
+        restricted(queried, values).positions.iterator.toVector.drop(offset)
+  }
+
+  it should "count and page bindings exactly when they can't overlap" in {
+    val parents = Seq(S2CellId.begin(1), S2CellId.begin(1).next()).map(cell => s"(<${s2CellIRI(cell)}>)").mkString(" ")
+    def matches = restricted(pattern(p = WithinNode, g = Graphs(5)), s"(?o) { $parents }")
+    matches.exact shouldBe true
+    matches.positions.size shouldBe 2 * 256
+    val all = matches.positions.iterator.flatten.toVector
+    all should have size 512
+    matches.positions.drop(300).iterator.flatten.toVector shouldBe all.drop(300)
+  }
+
+  it should "only answer quads in a graph a binding names" in {
+    // a binding is a GRAPH ?g binding, which never names the union or the unnamed graph
+    val graphs = Seq(Graphs(13).getURI(), "urn:x-kgf:union", "urn:ldf:defaultGraph", "urn:x-kgf:unnamed", Graphs(12).getURI())
+    val values = s"(?g) { ${graphs.map(graph => s"(<$graph>)").mkString(" ")} (\"level 13\") }"
+    restricted(pattern(s = yorkCell), values).positions.iterator.flatten.toSet shouldBe matching(
+      pattern(s = yorkCell, g = Graphs(13))
+    ).iterator.toSet
+  }
+
+  it should "restrict the union with bindings, naming the union after removing repeated quads" in {
+    val neighbor = cellIRI(13, "5525166068399603712")
+    val values = s"(?s ?o) { (<${yorkCell.getURI()}> UNDEF) (UNDEF <${neighbor.getURI()}>) }"
+    val answered = restricted(pattern(p = TouchesNode, g = UnionGraph), values).positions.iterator.flatten.toVector
+    answered.map(_.getGraph()).toSet shouldBe Set(UnionGraph)
+    answered.map(_.asTriple()).toSet shouldBe restricted(pattern(p = TouchesNode), values).positions.iterator.flatten
+      .map(_.asTriple())
+      .toSet
+    answered should have size 15
+    restricted(pattern(p = TouchesNode, g = iri("urn:x-kgf:unnamed")), values).positions.size shouldBe 0
+  }
+
+  it should "answer the union by name, and nothing for graphs other than the levels and the union" in {
+    for union <- Seq(UnionGraph, iri("urn:ldf:defaultGraph")) do
+      matching(pattern(s = yorkCell, p = TouchesNode, g = union)).iterator.toSeq shouldBe
+        matching(pattern(s = yorkCell, p = TouchesNode)).iterator.map(quad => Quad.create(UnionGraph, quad.asTriple())).toSeq
+      matching(pattern(g = union)).size shouldBe matching(pattern()).size
+    val deepArea = NodeFactory.createLiteralDT("999757.1006920862", XSDDatatype.XSDdouble)
+    for graph <- Seq(iri("urn:x-kgf:unnamed"), iri("http://example.org/graph"), iri(s"${S2Prefix}31")) do
+      withClue(graph) {
+        matching(pattern(g = graph)).size shouldBe 0
+        // nothing to find, rather than a pattern that can't be answered
+        matching(pattern(p = HasMetricAreaNode, o = deepArea, g = graph)).size shouldBe 0
+      }
+  }
+
+  it should "refuse bindings it can't answer, rather than reporting no matches" in {
+    S2Graph
+      .quads(pattern(p = HasMetricAreaNode), Bindings.parse(s"(?o) { (\"999757.1006920862\"^^<${XSDDatatype.XSDdouble.getURI()}>) }").get)
+      .isLeft shouldBe true
   }

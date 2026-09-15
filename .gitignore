@@ -6,3 +6,6 @@
 # build tool specific entries
 .bsp/
 .scala-build/
+
+# Comunica conformance harness
+interop/comunica/node_modules/
