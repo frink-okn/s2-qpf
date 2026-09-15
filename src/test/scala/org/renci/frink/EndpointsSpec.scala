@@ -87,6 +87,24 @@ class EndpointsSpec extends AnyFlatSpec with Matchers:
     empty.body.toOption.get should include(s"<$yorkCell>")
   }
 
+  it should "fill the HTML form with bindings that can be submitted again" in {
+    def html(params: (String, String)*) =
+      val response = basicRequest.get(uri"http://test.com/qpf?$params").header("Accept", "text/html").send(backend)
+      response.code shouldBe StatusCode.Ok
+      response.body.toOption.get
+    def values(page: String) =
+      val escaped = "(?s)<textarea[^>]*>(.*?)</textarea>".r.findFirstMatchIn(page).get.group(1)
+      Seq("&lt;" -> "<", "&gt;" -> ">", "&quot;" -> "\"", "&#39;" -> "'", "&amp;" -> "&").foldLeft(escaped) { case (text, (entity, char)) =>
+        text.replace(entity, char)
+      }
+    val submitted =
+      s"(?p ?o) { (<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> UNDEF) (UNDEF \"999757.1006920862\"^^<http://www.w3.org/2001/XMLSchema#double>) }"
+    val filled = values(html("subject" -> yorkCell, "predicate" -> "?p", "object" -> "?o", "values" -> submitted))
+    val resubmitted = html("subject" -> yorkCell, "predicate" -> "?p", "object" -> "?o", "values" -> filled)
+    resubmitted should include("22-rdf-syntax-ns#type")
+    resubmitted should include("999757.1006920862")
+  }
+
   it should "declare the union as the default graph where Comunica reads it" in {
     val found = quads(get().body.toOption.get)
     val declared = found.filter(_.getPredicate().getURI() == "http://www.w3.org/ns/sparql-service-description#defaultGraph")

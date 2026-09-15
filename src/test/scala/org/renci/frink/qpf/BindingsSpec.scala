@@ -1,10 +1,16 @@
 package org.renci.frink.qpf
 
+import org.apache.jena.datatypes.TypeMapper
 import org.apache.jena.datatypes.xsd.XSDDatatype
 import org.apache.jena.graph.Node
 import org.apache.jena.graph.NodeFactory
 import org.apache.jena.sparql.core.Quad
+import org.apache.jena.sparql.core.Var
+import org.apache.jena.sparql.engine.binding.BindingFactory
+import org.apache.jena.vocabulary.RDF.Nodes as RDF
+import org.apache.jena.vocabulary.RDFS.Nodes as RDFS
 import org.renci.frink.Util.SizedIterator
+import org.renci.frink.s2.S2Graph.GeoSPARQL
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -30,6 +36,26 @@ class BindingsSpec extends AnyFlatSpec with Matchers:
     bindings(Bindings.encode(parsed)) shouldBe parsed
     bindings("?s { <http://example.org/a> }").rows should have size 1
     bindings("(?s) { }").rows shouldBe empty
+  }
+
+  it should "write bindings that parse back to the same terms, with no prefixes" in {
+    val terms = Seq(
+      RDF.`type`,
+      RDFS.label,
+      NodeFactory.createURI("http://www.w3.org/2002/07/owl#Thing"),
+      NodeFactory.createURI(XSDDatatype.XSDdouble.getURI()),
+      NodeFactory.createLiteralDT("999757.1006920862", XSDDatatype.XSDdouble),
+      NodeFactory.createLiteralDT("2020-01-01", XSDDatatype.XSDdate),
+      NodeFactory.createLiteralDT("5525166171478818816", XSDDatatype.XSDinteger),
+      NodeFactory.createLiteralDT("POLYGON ((0 0, 1 0, 0 1, 0 0))", TypeMapper.getInstance().getSafeTypeByName(s"${GeoSPARQL}wktLiteral")),
+      NodeFactory.createLiteralString("say \"hi\"\nthere"),
+      NodeFactory.createLiteralLang("x", "en")
+    )
+    val (v, w) = (Var.alloc("v"), Var.alloc("w"))
+    val written = Bindings(Seq(v, w), terms.map(BindingFactory.binding(v, _)))
+    val read = bindings(Bindings.encode(written))
+    read.variables shouldBe Seq(v, w)
+    read.rows.map(row => (Option(row.get(v)), Option(row.get(w)))) shouldBe terms.map(term => (Option(term), Option.empty[Node]))
   }
 
   it should "reject anything but a single VALUES block" in {

@@ -3,12 +3,12 @@ package org.renci.frink.qpf
 import org.apache.jena.graph.Node
 import org.apache.jena.query.QueryFactory
 import org.apache.jena.query.Syntax
+import org.apache.jena.riot.out.NodeFmtLib
 import org.apache.jena.sparql.core.Quad
 import org.apache.jena.sparql.core.Var
 import org.apache.jena.sparql.engine.binding.Binding
 import org.apache.jena.sparql.syntax.ElementData
 import org.apache.jena.sparql.syntax.ElementGroup
-import org.apache.jena.sparql.util.FmtUtils
 import org.renci.frink.Util.MultiSizedIterator
 import org.renci.frink.Util.SizedIterator
 import sttp.tapir.DecodeResult
@@ -82,10 +82,11 @@ object Bindings:
         case Some(bindings) => Success(bindings)
     }
 
+  /** Written in N-Triples form, since `parse` declares no prefixes to abbreviate terms with */
   def encode(bindings: Bindings): String =
     val variables = bindings.variables.map(variable => s"?${variable.getVarName()}").mkString("(", " ", ")")
     val rows = bindings.rows.map(row =>
-      bindings.variables.map(variable => Option(row.get(variable)).map(FmtUtils.stringForNode).getOrElse("UNDEF")).mkString("(", " ", ")")
+      bindings.variables.map(variable => Option(row.get(variable)).map(NodeFmtLib.strNT).getOrElse("UNDEF")).mkString("(", " ", ")")
     )
     s"$variables { ${rows.mkString(" ")} }"
 
