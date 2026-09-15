@@ -3,7 +3,7 @@ package org.renci.frink.qpf
 import org.apache.jena.graph.Node
 import org.apache.jena.sparql.core.DatasetGraph
 import org.apache.jena.sparql.vocabulary.FOAF
-import org.renci.frink.qpf.Types.VariableOrIRI
+import org.renci.frink.qpf.Types.Term
 import scalatags.Text.all.*
 import scalatags.Text.tags2
 
@@ -23,10 +23,15 @@ object WebUI:
     val prev = m.previousQPFPage.map(uri => a(href := uri.toString, rel := "prev")("previous"))
     val next = m.nextQPFPage.map(uri => a(href := uri.toString, rel := "next")("next"))
     val nav = List(first, prev, next).flatten
-    val subj = params.s.collect { case iri: VariableOrIRI.IRI => iri }.map(i => s"<${i.value}>").getOrElse("?s")
-    val pred = params.p.collect { case iri: VariableOrIRI.IRI => iri }.map(i => s"<${i.value}>").getOrElse("?p")
-    val obj = params.o.collect { case iri: VariableOrIRI.IRI => iri }.map(i => s"<${i.value}>").getOrElse("?o")
-    val graph = params.g.collect { case iri: VariableOrIRI.IRI => iri }.map(i => s"<${i.value}>").getOrElse("?g")
+    def patternTerm(term: Option[Term], variable: String) = term match
+      case Some(Term.IRI(iri))         => s"<$iri>"
+      case Some(literal: Term.Literal) => Term.encode(literal)
+      case _                           => variable
+    def fieldValue(term: Option[Term]) = term.filterNot(_.isInstanceOf[Term.Variable]).map(Term.encode).getOrElse("")
+    val subj = patternTerm(params.s, "?s")
+    val pred = patternTerm(params.p, "?p")
+    val obj = patternTerm(params.o, "?o")
+    val graph = patternTerm(params.g, "?g")
     "<!DOCTYPE html>" +
       html(
         head(
@@ -52,7 +57,7 @@ object WebUI:
                       input(
                         id := "subject",
                         name := "subject",
-                        value := params.s.collect { case i: VariableOrIRI.IRI => i }.map(VariableOrIRI.encode).getOrElse("")
+                        value := fieldValue(params.s)
                       )
                     ),
                     div(
@@ -60,7 +65,7 @@ object WebUI:
                       input(
                         id := "predicate",
                         name := "predicate",
-                        value := params.p.collect { case i: VariableOrIRI.IRI => i }.map(VariableOrIRI.encode).getOrElse("")
+                        value := fieldValue(params.p)
                       )
                     ),
                     div(
@@ -68,7 +73,7 @@ object WebUI:
                       input(
                         id := "object",
                         name := "object",
-                        value := params.o.collect { case i: VariableOrIRI.IRI => i }.map(VariableOrIRI.encode).getOrElse("")
+                        value := fieldValue(params.o)
                       )
                     ),
                     div(
@@ -76,7 +81,7 @@ object WebUI:
                       input(
                         id := "graph",
                         name := "graph",
-                        value := params.g.collect { case i: VariableOrIRI.IRI => i }.map(VariableOrIRI.encode).getOrElse("")
+                        value := fieldValue(params.g)
                       )
                     )
                   )
@@ -123,7 +128,7 @@ object WebUI:
                     ),
                     td(
                       a(
-                        href := m.endpoint.withParam("object", q.getObject().toString()).toString,
+                        href := m.endpoint.withParam("object", Term.encode(Term.fromNode(q.getObject()))).toString,
                         tags2.abbr(title := q.getObject().toString())(q.getObject().toString(pm))
                       )
                     ),
