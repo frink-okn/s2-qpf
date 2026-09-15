@@ -17,17 +17,17 @@ object WebUI:
     val pm = qpf.prefixMapping
     val firstItem = m.skip + 1
     val lastItem = firstItem + qpf.data.size - 1
-    val first = (if m.page == 1 then None else Some(m.currentQPF.withParam("page", None))).map(uri =>
-      a(href := uri.toString, rel := "first")("first")
-    )
-    val prev = m.previousQPFPage.map(uri => a(href := uri.toString, rel := "prev")("previous"))
-    val next = m.nextQPFPage.map(uri => a(href := uri.toString, rel := "next")("next"))
+    val first = Option.when(m.page != 1)(a(href := m.fragmentURL, rel := "first")("first"))
+    val prev = m.previousPage.map(uri => a(href := uri, rel := "prev")("previous"))
+    val next = m.nextPage.map(uri => a(href := uri, rel := "next")("next"))
     val nav = List(first, prev, next).flatten
     def patternTerm(term: Option[Term], variable: String) = term match
       case Some(Term.IRI(iri))         => s"<$iri>"
       case Some(literal: Term.Literal) => Term.encode(literal)
-      case _                           => variable
-    def fieldValue(term: Option[Term]) = term.filterNot(_.isInstanceOf[Term.Variable]).map(Term.encode).getOrElse("")
+      case Some(Term.Variable(name))   => s"?$name"
+      case None                        => variable
+    // variables are shown, since bindings refer to them
+    def fieldValue(term: Option[Term]) = term.map(Term.encode).getOrElse("")
     val subj = patternTerm(params.s, "?s")
     val pred = patternTerm(params.p, "?p")
     val obj = patternTerm(params.o, "?o")
@@ -83,15 +83,28 @@ object WebUI:
                         name := "graph",
                         value := fieldValue(params.g)
                       )
+                    ),
+                    div(
+                      label(`for` := "values")("values (bindings of the pattern's variables, in SPARQL VALUES syntax)"),
+                      textarea(
+                        id := "values",
+                        name := "values",
+                        placeholder := "(?s) { (<http://stko-kwg.geog.ucsb.edu/lod/resource/s2.level13.5525166171478818816>) }"
+                      )(params.values.map(Bindings.encode).getOrElse(""))
                     )
                   )
                 ),
                 p(input(`type` := "submit", value := "Search"))
               )
             ),
-            h3("Matches in S2 for ", em(s"{ $subj $pred $obj $graph }")),
+            h3(
+              "Matches in S2 for ",
+              em(s"{ $subj $pred $obj $graph }"),
+              params.values.map(bindings => frag(" restricted by ", em(s"VALUES ${Bindings.encode(bindings)}")))
+            ),
             div(
-              if m.totalItems > 0 then
+              if m.totalItems == 0 then p("There are no matches for this pattern.")
+              else if m.exactTotal then
                 p(
                   s"Showing items $firstItem to $lastItem of ",
                   span(f"${m.totalItems}%,d"),
@@ -99,7 +112,12 @@ object WebUI:
                   span(m.itemsPerPage.toString()),
                   " items per page."
                 )
-              else p("There are no matches for this pattern.")
+              else
+                p(
+                  s"Showing ${qpf.data.size} items from positions $firstItem to ${(m.skip + m.itemsPerPage).min(m.totalItems)} of at most ",
+                  span(f"${m.totalItems}%,d"),
+                  ", since items matching several bindings are only shown at their first position."
+                )
             ),
             tags2.nav(nav),
             table(

@@ -10,6 +10,34 @@
 
 - Provide server location in `QPF_SERVER_LOCATION` environment variable (e.g., `http://localhost:8080`)
 
+## Bindings-restricted fragments
+
+The server also answers [bindings-restricted](https://arxiv.org/abs/1608.08148) requests (brTPF, applied to quad patterns): a `values` parameter holding SPARQL `VALUES` syntax without the `VALUES` keyword restricts the pattern to quads whose values for its variables are compatible with at least one row, e.g. `subject=?cell&predicate=http://stko-kwg.geog.ucsb.edu/lod/ontology/cellID&values=(?cell) { (<http://stko-kwg.geog.ucsb.edu/lod/resource/s2.level13.5525166171478818816>) }`. A request can have up to 1000 rows.
+
+Clients can't discover this from the server, so tell [Comunica](https://comunica.dev) to use it:
+
+```javascript
+new QueryEngine().queryBindings(query, { sources: [{ type: 'brtpf', value: 'https://frink.apps.renci.org/s2/qpf' }] });
+```
+
+No other configuration is needed. A pattern outside any `GRAPH` reads every level, because
+the page metadata declares the union as the default graph and Comunica requests it by that
+name. Leave Comunica's `unionDefaultGraph` context flag off: it is unnecessary here, and
+against an endpoint that declares no default graph it makes Comunica build the union
+itself without removing duplicates. The graph semantics, shared with KGF, are in
+[docs/graph-semantics.md](docs/graph-semantics.md).
+
+Bindings are sent in the URL, so a proxy in front of the server needs to accept long request lines: Comunica's 64 bindings per request can exceed 7 KB.
+
+When rows overlap, a quad matching several of them is only included for the first, so pages can have fewer than 100 quads, and the total is an upper bound.
+
+`interop/comunica` checks compatibility with Comunica 5.3.0 against a running server:
+
+```shell
+npm ci --prefix interop/comunica
+node interop/comunica/test.mjs http://localhost:8080/qpf
+```
+
 ## Developer quick start
 
 If you don't have Scala CLI installed yet, please follow these [installation instructions](https://scala-cli.virtuslab.org/install).
