@@ -15,8 +15,12 @@ import org.apache.jena.vocabulary.RDFS.Nodes as RDFS
 import org.renci.frink.Util.FanOutIterator
 import org.renci.frink.Util.MultiSizedIterator
 import org.renci.frink.Util.SizedIterator
+import org.renci.frink.qpf.Bindings
+import org.renci.frink.qpf.Matches
+import org.renci.frink.qpf.QuadPatternFragment
 
 import java.lang.Long
+import java.util.UUID
 import scala.jdk.CollectionConverters.*
 import scala.util.Try
 
@@ -73,24 +77,49 @@ object S2Graph:
     val subject = pattern.getSubject()
     val predicate = pattern.getPredicate()
     val obj = pattern.getObject()
-    // nothing is related to itself
-    if subject.matches(obj) then Right(SizedIterator.empty)
+    val positions = Seq(pattern.getGraph(), subject, predicate, obj)
+    // No quad has a term in more than one position: nothing is related to itself, and graphs, predicates, and classes are never cells
+    if positions.distinct.size < positions.size then Right(SizedIterator.empty)
     else
-      // Graphs other than the level graphs, such as the advertised default graph, match every level
-      val levels = toS2Level(pattern.getGraph()).map(Seq(_)).getOrElse(Levels)
+      val graph = pattern.getGraph()
+      val union = UnionGraphs(graph)
+      // The union and a variable match every level. Any other graph but a level graph has no quads, including the unnamed graph.
+      val levels = if graph.isVariable() || union then Levels else toS2Level(graph).toSeq
       def relation(relationPredicate: Node, relationQuads: => SizedIterator[Quad]): SizedIterator[Quad] =
         if matches(predicate, relationPredicate) then relationQuads else SizedIterator.empty
-      descriptionQuads(subject, predicate, obj, levels).map(description =>
-        MultiSizedIterator(
-          Vector(
-            description,
-            relation(WithinNode, withinQuads(subject, obj, levels)),
-            relation(ContainsNode, containsQuads(subject, obj, levels)),
-            relation(TouchesNode, touchesQuads(subject, obj, levels)),
-            relation(ConnectedToNode, connectedToQuads(subject, obj, levels))
+      if levels.isEmpty then Right(SizedIterator.empty)
+      else
+        descriptionQuads(subject, predicate, obj, levels).map { description =>
+          val found = MultiSizedIterator(
+            Vector(
+              description,
+              relation(WithinNode, withinQuads(subject, obj, levels)),
+              relation(ContainsNode, containsQuads(subject, obj, levels)),
+              relation(TouchesNode, touchesQuads(subject, obj, levels)),
+              relation(ConnectedToNode, connectedToQuads(subject, obj, levels))
+            )
           )
-        )
+          // Each triple is in exactly one level graph, so the union has as many triples as the levels have quads
+          if union then found.map(inUnion) else found
+        }
+
+  /** Quads matching a pattern and compatible with a row of bindings (bindings-restricted QPF), or the reason they can't be found */
+  def quads(pattern: Quad, bindings: Bindings): Either[String, Matches] =
+    if UnionGraphs(pattern.getGraph()) then
+      // Quads matching several rows are found in their level graphs, and only then named as quads in the union
+      val anyLevel = Quad.create(NodeFactory.createVariable(UUID.randomUUID().toString()), pattern.asTriple())
+      quads(anyLevel, bindings).map(matches => matches.copy(positions = matches.positions.map(_.map(inUnion))))
+    else
+      // A row binding the graph is a GRAPH ?g binding, which only ever binds named graphs, never the union
+      bindings.matches(
+        pattern,
+        restriction => if UnionGraphs(restriction.getGraph()) then Right(SizedIterator.empty) else quads(restriction)
       )
+
+  /** The union of the level graphs, and the name this server advertised for it before adopting the KGF name */
+  val UnionGraphs: Set[Node] = Set(QuadPatternFragment.UnionGraph, NodeFactory.createURI("urn:ldf:defaultGraph"))
+
+  private def inUnion(quad: Quad): Quad = Quad.create(QuadPatternFragment.UnionGraph, quad.asTriple())
 
   /** Triples about a cell itself, rather than its relations to other cells */
   def cellDescription(cell: S2CellId): Seq[Quad] =
