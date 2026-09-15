@@ -1,5 +1,9 @@
 package org.renci.frink.qpf
 
+import org.apache.jena.datatypes.TypeMapper
+import org.apache.jena.datatypes.xsd.XSDDatatype
+import org.apache.jena.graph.Node
+import org.apache.jena.graph.NodeFactory
 import org.apache.jena.riot.RDFDataMgr
 import org.apache.jena.riot.RDFFormat
 import org.apache.jena.riot.writer.NQuadsWriter
@@ -20,26 +24,71 @@ import scala.util.Try
 
 object Types:
 
-  enum VariableOrIRI(val value: String):
-    case Variable(override val value: String) extends VariableOrIRI(value)
-    case IRI(override val value: String) extends VariableOrIRI(value)
+  enum Term:
+    case Variable(name: String)
+    case IRI(iri: String)
+    case Literal(lexicalForm: String, datatype: Option[String], language: Option[String])
 
-  object VariableOrIRI:
-    def parse(value: String): Try[VariableOrIRI] =
+    def isBlank: Boolean = this match
+      case Variable(name) => name.isBlank()
+      case IRI(iri)       => iri.isBlank()
+      case _: Literal     => false
+
+  object Term:
+    def parse(value: String): Try[Term] =
       if value.startsWith("?") then Success(Variable(value.drop(1)))
-      else if value.startsWith("\"") then Failure(Exception("Literals are not allowed"))
+      else if value.startsWith("\"") then
+        // Jena rejects some literals, such as those with malformed language tags
+        parseLiteral(value).flatMap(literal =>
+          Try(toNode(literal)).map(_ => literal).orElse(Failure(Exception(s"Invalid literal: $value")))
+        )
       else if value.startsWith("_") then Failure(Exception("Blank nodes are not allowed"))
       else Success(IRI(value))
 
-    def decode(s: String): DecodeResult[VariableOrIRI] = VariableOrIRI.parse(s) match
+    /** Hydra explicit representation: `"lexical form"`, `"lexical form"@language`, or `"lexical form"^^datatype` */
+    private def parseLiteral(value: String): Try[Term] =
+      val closingQuote = value.lastIndexOf('"')
+      if closingQuote < 1 then Failure(Exception(s"Invalid literal: $value"))
+      else
+        val lexicalForm = value.substring(1, closingQuote)
+        val suffix = value.substring(closingQuote + 1)
+        if suffix.isEmpty then Success(Literal(lexicalForm, None, None))
+        else if suffix.startsWith("@") && suffix.length > 1 then Success(Literal(lexicalForm, None, Some(suffix.drop(1))))
+        else if suffix.startsWith("^^") && suffix.length > 2 then
+          Success(Literal(lexicalForm, Some(suffix.drop(2).stripPrefix("<").stripSuffix(">")), None))
+        else Failure(Exception(s"Invalid literal: $value"))
+
+    def decode(s: String): DecodeResult[Term] = Term.parse(s) match
       case Success(v) => DecodeResult.Value(v)
       case Failure(f) => DecodeResult.Error(s, f)
 
-    def encode(term: VariableOrIRI): String = term match
-      case Variable(value) => s"?$value"
-      case IRI(value)      => value
+    def encode(term: Term): String = term match
+      case Variable(name)                             => s"?$name"
+      case IRI(iri)                                   => iri
+      case Literal(lexicalForm, _, Some(language))    => s"\"$lexicalForm\"@$language"
+      case Literal(lexicalForm, Some(datatype), None) => s"\"$lexicalForm\"^^$datatype"
+      case Literal(lexicalForm, None, None)           => s"\"$lexicalForm\""
 
-    given Codec[String, VariableOrIRI, TextPlain] = Codec.string.mapDecode(decode)(encode)
+    def toNode(term: Term): Node = term match
+      case Variable(name)                          => NodeFactory.createVariable(name)
+      case IRI(iri)                                => NodeFactory.createURI(iri)
+      case Literal(lexicalForm, _, Some(language)) => NodeFactory.createLiteralLang(lexicalForm, language)
+      case Literal(lexicalForm, Some(datatype), None) =>
+        NodeFactory.createLiteralDT(lexicalForm, TypeMapper.getInstance().getSafeTypeByName(datatype))
+      case Literal(lexicalForm, None, None) => NodeFactory.createLiteralString(lexicalForm)
+
+    def fromNode(node: Node): Term =
+      if node.isVariable() then Variable(node.getName())
+      else if node.isLiteral() then
+        val language = Option(node.getLiteralLanguage()).filter(_.nonEmpty)
+        val datatype = Option(node.getLiteralDatatypeURI()).filter(_ => language.isEmpty).filterNot(_ == XSDDatatype.XSDstring.getURI())
+        Literal(node.getLiteralLexicalForm(), datatype, language)
+      else IRI(node.getURI())
+
+    val notLiteral: Validator[Term] =
+      Validator.custom(term => ValidationResult.validWhen(!term.isInstanceOf[Literal]), Some("Literals are only allowed as the object"))
+
+    given Codec[String, Term, TextPlain] = Codec.string.mapDecode(decode)(encode)
 
   object DatasetGraphUtils:
     def fromTrig(text: String): DecodeResult[QuadPatternFragment] = ???

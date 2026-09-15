@@ -12,7 +12,7 @@ import org.apache.jena.sparql.vocabulary.FOAF
 import org.apache.jena.vocabulary.DCTerms
 import org.apache.jena.vocabulary.RDF.Nodes as RDF
 import org.renci.frink.Util.SizedIterator
-import org.renci.frink.qpf.Types.VariableOrIRI
+import org.renci.frink.qpf.Types.Term
 import sttp.model.Uri
 import sttp.tapir.*
 
@@ -52,19 +52,14 @@ final case class FragmentMetadata(
   private val objectBNode = NodeFactory.createBlankNode("object")
   private val graphBNode = NodeFactory.createBlankNode("graph")
 
-  private def toParamValue(term: VariableOrIRI): String =
-    term match
-      case VariableOrIRI.Variable(value) => s"?$value"
-      case VariableOrIRI.IRI(value)      => value
-
   val page = params.page.getOrElse(BigInt(1))
   val skip = (page - 1) * itemsPerPage
   val template = s"$endpoint{?subject,predicate,object,graph}"
   val currentQPF = endpoint
-    .addParam("subject", params.s.map(toParamValue))
-    .addParam("predicate", params.p.map(toParamValue))
-    .addParam("object", params.o.map(toParamValue))
-    .addParam("graph", params.g.map(toParamValue))
+    .addParam("subject", params.s.map(Term.encode))
+    .addParam("predicate", params.p.map(Term.encode))
+    .addParam("object", params.o.map(Term.encode))
+    .addParam("graph", params.g.map(Term.encode))
   val currentQPFPage = currentQPF.addParam("page", params.page.map(_.toString))
   val previousQPFPage =
     if page != 1 then
@@ -149,10 +144,10 @@ object QuadPatternFragment:
   )
 
   final case class Parameters(
-      s: Option[VariableOrIRI],
-      p: Option[VariableOrIRI],
-      o: Option[VariableOrIRI],
-      g: Option[VariableOrIRI],
+      s: Option[Term],
+      p: Option[Term],
+      o: Option[Term],
+      g: Option[Term],
       page: Option[BigInt]
   )
 
