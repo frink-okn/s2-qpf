@@ -147,7 +147,11 @@ final case class QuadPatternFragment(data: Seq[Quad], metadata: FragmentMetadata
   def toDatasetGraph: DatasetGraph =
     val dataset = DatasetGraphInMemory()
     dataset.prefixes().putAll(this.prefixMapping)
-    data.foreach(dataset.add)
+    // The union is the document's default graph rather than quads tagged with its IRI: stock Comunica discards tagged union rows from the
+    // second page of a fragment on, which truncates every bare pattern (docs/graph-semantics.md, "Test record, 2026-11-19").
+    data.foreach(quad =>
+      if QuadPatternFragment.UnionGraphs(quad.getGraph()) then dataset.getDefaultGraph().add(quad.asTriple()) else dataset.add(quad)
+    )
     metadata.toQuads.foreach(dataset.add)
     dataset
 
@@ -160,6 +164,9 @@ object QuadPatternFragment:
     * IRI names the union in KGF datasets.
     */
   val UnionGraph = NodeFactory.createURI("urn:x-kgf:union")
+
+  /** The union's IRI, and the name this server advertised for it before adopting KGF's */
+  val UnionGraphs: Set[org.apache.jena.graph.Node] = Set(UnionGraph, NodeFactory.createURI("urn:ldf:defaultGraph"))
 
   val quadsPerPage = 100
 
