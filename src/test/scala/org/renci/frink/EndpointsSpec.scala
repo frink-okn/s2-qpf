@@ -5,6 +5,8 @@ import org.apache.jena.riot.Lang
 import org.apache.jena.riot.RDFParser
 import org.apache.jena.sparql.core.Quad
 import org.renci.frink.kgf.Service
+import org.renci.frink.qpf.Matches
+import org.renci.frink.qpf.QuadPatternFragment
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import sttp.client3.*
@@ -118,6 +120,20 @@ class EndpointsSpec extends AnyFlatSpec with Matchers:
         quad.getPredicate() == node("http://www.w3.org/ns/sparql-service-description#defaultDataset") &&
         quad.getObject() == declared.head.getSubject()
     ) shouldBe true
+  }
+
+  it should "declare the vocabulary the manifest publishes, and nothing beside it but this document's controls" in {
+    val fragment = QuadPatternFragment.qpf(
+      Matches.of(Util.SizedIterator.empty),
+      QuadPatternFragment.Parameters(None, None, None, None, None, None),
+      uri"http://test.com/s2/v/${Service.Version}/tpf",
+      None
+    )
+    val declared = fragment.prefixMapping.getNsPrefixMap().asScala
+    for (prefix, namespace) <- Service.Prefixes do withClue(s"$prefix: ") { declared.get(prefix) shouldBe Some(namespace) }
+    // the empty prefix wrote kwg-ont terms as :sfTouches here while the KGF routes wrote kwg-ont:sfTouches
+    declared.keySet should not contain ""
+    declared.keySet.diff(Service.PrefixMap.keySet) shouldBe QuadPatternFragment.ControlPrefixes.keySet
   }
 
   it should "answer the union with untagged triples, and other graphs with nothing" in {

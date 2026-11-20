@@ -44,7 +44,8 @@ object Void:
   private val Homepage = iri(s"${foaf}homepage")
   private val Graph = iri(s"${sd}graph")
 
-  private val extraPrefixes = Map("void" -> void, "dct" -> dct, "sd" -> sd, "foaf" -> foaf)
+  /** This document's own vocabulary, beside the dataset's published prefix map, which `Rdf.build` declares */
+  private val extraPrefixes = Map("dct" -> dct, "sd" -> sd, "foaf" -> foaf)
 
   private def number(value: BigInt): Node = NodeFactory.createLiteralDT(value.toString, XSDDatatype.XSDinteger)
 

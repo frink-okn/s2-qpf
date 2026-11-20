@@ -138,6 +138,18 @@ object datatype (`rdfs:label` → `xsd:string`, `kwg-ont:cellID` → `xsd:intege
 an IRI), so a datatype restriction is a predicate restriction. No literal here carries a
 language tag, so `o.lang` matches nothing, exactly.
 
+**One declared vocabulary.** The prefix map the manifest publishes is the only one this
+server declares: a request's CURIEs resolve against it, every RDF representation of every
+route declares it, and every HTML page abbreviates with it. Its names and namespaces are
+the OKN registry's shared prefix table, `okn-registry/docs/registry/prefixes.yaml`, which
+`ServiceSpec` checks them against where that checkout sits beside this one. Only a
+document's own hypermedia adds to it — the TPF document declares `hydra`, `dct`, `foaf`
+and `sd` for its controls, and the VoID document `dct`, `sd` and `foaf` for its own.
+`hydra` is the one name not in the shared table, which is a table of the vocabularies the
+federation's graphs publish rather than of anyone's controls. Until 2026-11-20 the TPF
+route declared a map of its own, with the empty prefix for the KWG ontology, so one term
+read two ways depending on the route that showed it.
+
 Blank nodes are parsed and match nothing (doc 03 §3.3). No data blank node exists here,
 so doc 03 §3.4.1's skolem URN never appears.
 
@@ -324,6 +336,10 @@ The QPF/brTPF hypermedia route, unchanged in semantics from `/qpf` except that *
 rows are no longer tagged `urn:x-kgf:union`**; they are served untagged, in the
 document's default graph. The measurement behind that correction, and what it costs, are
 in [`graph-semantics.md`](graph-semantics.md) §"What each QPF request returns".
+
+It declares the same vocabulary as every other route (§6) and renders its pages in the
+same shell as every other page (`kgf.Html.page`), because a compatibility layer is still
+part of this server rather than a second site.
 
 ## 14. Errors
 

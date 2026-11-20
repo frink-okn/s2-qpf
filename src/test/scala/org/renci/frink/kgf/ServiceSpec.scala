@@ -20,6 +20,20 @@ class ServiceSpec extends AnyFlatSpec with Matchers:
     Service.ContentDigest should fullyMatch regex "sha256:[0-9a-f]{64}"
   }
 
+  "The prefix map" should "declare what the OKN shared prefix table declares" in {
+    val table = Paths.get("../okn-registry/docs/registry/prefixes.yaml")
+    assume(Files.exists(table), "the okn-registry checkout is beside this one")
+    val entry = """^([A-Za-z0-9_.-]+):\s*"([^"]+)"""".r
+    val shared = String(Files.readAllBytes(table), "UTF-8").linesIterator
+      .flatMap(entry.findFirstMatchIn)
+      .map(found => found.group(1) -> found.group(2))
+      .toMap
+    for (prefix, namespace) <- Service.Prefixes do withClue(s"$prefix: ") { shared.get(prefix) shouldBe Some(namespace) }
+    // hydra is the TPF document's own hypermedia vocabulary, which no graph of the federation publishes
+    for (prefix, namespace) <- org.renci.frink.qpf.QuadPatternFragment.ControlPrefixes - "hydra" do
+      withClue(s"$prefix: ") { shared.get(prefix) shouldBe Some(namespace) }
+  }
+
   "The caps" should "set the level an area lookup is refused below" in {
     // the deepest level whose cells fit the published candidate budget
     val fitting = Model.Levels.filter(level => Model.cells(level) <= Limits.CandidateBudget)

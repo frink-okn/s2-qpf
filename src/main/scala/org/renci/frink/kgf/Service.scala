@@ -45,9 +45,16 @@ object Service:
   /** Declared capabilities beside the mandatory core profile (KGF doc 03 section 3.1 principle 5) */
   val Capabilities = Vector("graphs", "terms")
 
-  /** The prefix map a request's CURIEs resolve against, and the manifest publishes. `kwg-s2` and `kwg-s2geom` are the federation's shared
-    * prefixes for cells and their geometries (KGF doc 05 section 5.8), which is how a routing index tells this server's IRIs from other
-    * KnowWhereGraph resources under `kwg:`.
+  /** The one vocabulary this server declares.
+    *
+    * Every name and namespace here is the OKN registry's shared prefix table, `okn-registry/docs/registry/prefixes.yaml`, which is also the
+    * federation's display map — `ServiceSpec` checks them against it where that checkout is a sibling of this one. `kwg-s2` and
+    * `kwg-s2geom` are the shared prefixes for cells and their geometries (KGF doc 05 section 5.8), which is how a routing index tells this
+    * server's IRIs from other KnowWhereGraph resources under `kwg:`.
+    *
+    * It is declared once and used everywhere: the manifest publishes it, a request's CURIEs resolve against it, every RDF representation of
+    * every route declares it, and every HTML page abbreviates with it. Only a document's own hypermedia controls add to it — the TPF
+    * document's (`qpf.QuadPatternFragment.ControlPrefixes`) and the VoID document's (`kgf.Void`).
     */
   val Prefixes: Seq[(String, String)] = Vector(
     "geo" -> S2Graph.GeoSPARQL,

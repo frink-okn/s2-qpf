@@ -158,8 +158,10 @@ object Html:
         case _                                               => None
     case _ => None
 
-  /** An IRI under a declared prefix, written as a CURIE */
-  private def abbreviate(iri: String): String =
+  /** An IRI under a declared prefix, written as a CURIE. Every page abbreviates with the one map the manifest publishes, so a term reads
+    * the same whichever route showed it.
+    */
+  def abbreviate(iri: String): String =
     Service.Prefixes
       .filter((_, namespace) => iri.startsWith(namespace))
       .sortBy((_, namespace) => -namespace.length)

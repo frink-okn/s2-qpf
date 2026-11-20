@@ -324,6 +324,19 @@ class EndpointsSpec extends AnyFlatSpec with Matchers:
       response.body.toOption.get should startWith("<!DOCTYPE html>")
   }
 
+  it should "abbreviate a term the same way on every route" in {
+    def page(operation: String, params: (String, String)*) =
+      val response = send(basicRequest.get(at(operation, (params :+ ("format" -> "html"))*)))
+      response.code shouldBe StatusCode.Ok
+      response.body.toOption.get
+    // a bound position is echoed as the request spelled it, so compare pages whose rows carry the term
+    val fragment = page("fragment", "s" -> s"<$cell>")
+    val tpf = page("tpf", "subject" -> cell)
+    for abbreviated <- Seq("kwg-ont:cellID", "kwg-s2geom:level13.5525166171478818816") do
+      withClue(s"$abbreviated on /fragment: ") { fragment should include(abbreviated) }
+      withClue(s"$abbreviated on /tpf: ") { tpf should include(abbreviated) }
+  }
+
   "The server" should "answer an unknown dataset, release or resource with a coded 404" in {
     code(send(basicRequest.get(uri"http://test.com/other"))) shouldBe "not_found"
     code(send(basicRequest.get(uri"http://test.com/s2/v/v0.0.1/fragment"))) shouldBe "not_found"

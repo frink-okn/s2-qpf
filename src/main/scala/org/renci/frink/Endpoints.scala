@@ -104,12 +104,6 @@ object Endpoints:
             QuadPatternFragment.qpf(
               matches,
               Parameters(filteredS, filteredP, filteredO, filteredG, page, values),
-              Map(
-                "kwg" -> S2Graph.KWGResource,
-                "" -> S2Graph.KWGOnt,
-                "geo" -> S2Graph.GeoSPARQL,
-                "spatial-full" -> S2Graph.SpatialFull
-              ),
               tpfService,
               requestQuery
             )

@@ -69,8 +69,10 @@ object WebUI:
             f"of at most ${metadata.totalItems}%,d, since a quad matching several bindings is shown only at its first position."
         )
 
+    // abbreviated with the dataset's published prefix map, as the KGF pages abbreviate: one term reads one way across the server
+    def show(term: Node) = if term.isURI() then Html.abbreviate(term.getURI()) else term.toString(prefixes)
     def cell(term: Node, parameter: String, requested: String) =
-      td(a(href := metadata.endpoint.withParam(parameter, requested).toString, title := term.toString)(term.toString(prefixes)))
+      td(a(href := metadata.endpoint.withParam(parameter, requested).toString, title := term.toString)(show(term)))
 
     val results = tag("table")(
       thead(tr(th("subject"), th("predicate"), th("object"), th("graph"))),
