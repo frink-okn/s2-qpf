@@ -6,10 +6,14 @@ import scalatags.Text.tags2.title as titleTag
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
-/** The HTML representation of every KGF resource.
+/** The HTML representation of every resource this server serves.
   *
-  * One renderer over the JSON a resource already produces, rather than a page per operation: the JSON is the answer, and this shows it with
-  * its IRIs followed. An array of objects becomes a table, anything else a list of fields.
+  * One renderer over the JSON a KGF resource already produces, rather than a page per operation: the JSON is the answer, and this shows it
+  * with its IRIs followed. An array of objects becomes a table, anything else a list of fields.
+  *
+  * `page` is the shell and `styles` the stylesheet for **every** page, the TPF route's search form included (`qpf.WebUI`), so that one
+  * server does not look like two sites. Nothing is loaded from a CDN: the stylesheet is small enough to inline, and a fragment server
+  * should not need a third party to render its own pages.
   */
 object Html:
 
@@ -19,7 +23,9 @@ object Html:
     |body { font-family: system-ui, sans-serif; margin: 0 auto; max-width: 70rem; padding: 1.5rem; line-height: 1.5; color: #1a1a1a; }
     |header { border-bottom: 1px solid #ddd; margin-bottom: 1.5rem; padding-bottom: 0.75rem; }
     |header a { margin-right: 0.75rem; }
+    |header a.here { font-weight: 600; color: #1a1a1a; text-decoration: none; }
     |h1 { font-size: 1.4rem; margin: 0 0 0.5rem; }
+    |h2 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
     |table { border-collapse: collapse; width: 100%; margin: 0.5rem 0 1.5rem; }
     |th, td { border-bottom: 1px solid #eee; padding: 0.35rem 0.6rem; text-align: left; vertical-align: top; font-size: 0.9rem; }
     |th { background: #f7f7f7; font-weight: 600; }
@@ -30,11 +36,23 @@ object Html:
     |code, pre { font-family: ui-monospace, monospace; font-size: 0.85rem; }
     |pre { background: #f7f7f7; overflow-x: auto; padding: 0.75rem; }
     |.tag { color: #666; font-size: 0.8rem; }
+    |.muted { color: #666; font-size: 0.9rem; }
+    |.pattern { background: #f7f7f7; display: inline-block; padding: 0.3rem 0.5rem; }
+    |form { margin: 0 0 1.5rem; }
+    |.field { display: grid; grid-template-columns: 6rem minmax(0, 1fr); gap: 0.3rem 1rem; align-items: baseline; margin-bottom: 0.5rem; }
+    |label { color: #444; font-size: 0.9rem; }
+    |input, textarea { border: 1px solid #ccc; box-sizing: border-box; font: inherit; font-size: 0.9rem; padding: 0.3rem 0.45rem; width: 100%; }
+    |textarea { font-family: ui-monospace, monospace; min-height: 4rem; }
+    |input[type=submit] { background: #f7f7f7; cursor: pointer; padding: 0.35rem 1rem; width: auto; }
+    |nav { display: flex; gap: 1rem; font-size: 0.9rem; margin: 0.75rem 0; }
     |footer { border-top: 1px solid #ddd; color: #666; font-size: 0.85rem; margin-top: 2rem; padding-top: 0.75rem; }
+    |footer p { margin: 0.2rem 0; }
     |""".stripMargin
 
   def page(heading: String, parts: Frag*): String =
-    val operations = Service.Operations.map(operation => a(href := Service.link(Service.operationPath(operation)), operation))
+    val operations = Service.Operations.map(operation =>
+      a(href := Service.link(Service.operationPath(operation)), cls := (if operation == heading then "here" else ""), operation)
+    )
     "<!DOCTYPE html>" + html(
       head(
         meta(charset := "utf-8"),
@@ -45,15 +63,33 @@ object Html:
       body(
         tag("header")(
           h1(a(href := Service.link(Service.DatasetPath), Service.Title), raw(" &middot; "), heading),
-          div(a(href := Service.link("/"), "service"), operations)
+          div(a(href := Service.link("/"), cls := (if heading == "service" then "here" else ""), "service"), operations)
         ),
         parts,
         tag("footer")(
-          s"${Service.DatasetId} ${Service.Version} — a computed graph: every quad is computed on request. ",
-          a(href := "https://github.com/frink-okn/s2-qpf", "s2-qpf")
+          p(
+            s"${Service.DatasetId} ${Service.Version} — a computed graph: every quad is computed on request. ",
+            a(href := "https://github.com/frink-okn/s2-qpf", "s2-qpf"),
+            ", over ",
+            a(href := "http://s2geometry.io", "S2 Geometry"),
+            "."
+          ),
+          p(
+            "Part of the ",
+            a(href := "https://frink.renci.org", "FRINK project"),
+            ", funded by ",
+            a(href := "https://www.nsf.gov/awardsearch/showAward?AWD_ID=2333810", "NSF award 2333810"),
+            " to ",
+            a(href := "https://renci.org", "RENCI"),
+            "."
+          )
         )
       )
     ).render
+
+  /** A labelled control of the TPF route's search form, in the shell's own grid */
+  def field(name: String, caption: String, control: Frag): Frag =
+    div(cls := "field")(label(`for` := name)(caption), control)
 
   /** A JSON answer as HTML */
   def render(value: Json): Frag = value match
