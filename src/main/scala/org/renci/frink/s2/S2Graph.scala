@@ -117,7 +117,7 @@ object S2Graph:
       )
 
   /** The union of the level graphs, and the name this server advertised for it before adopting the KGF name */
-  val UnionGraphs: Set[Node] = Set(QuadPatternFragment.UnionGraph, NodeFactory.createURI("urn:ldf:defaultGraph"))
+  val UnionGraphs: Set[Node] = QuadPatternFragment.UnionGraphs
 
   private def inUnion(quad: Quad): Quad = Quad.create(QuadPatternFragment.UnionGraph, quad.asTriple())
 

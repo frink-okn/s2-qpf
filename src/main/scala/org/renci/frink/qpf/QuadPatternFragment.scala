@@ -12,6 +12,7 @@ import org.apache.jena.sparql.vocabulary.FOAF
 import org.apache.jena.vocabulary.DCTerms
 import org.apache.jena.vocabulary.RDF.Nodes as RDF
 import org.renci.frink.Util.SizedIterator
+import org.renci.frink.kgf.Service
 import org.renci.frink.qpf.Types.Term
 import sttp.model.Uri
 import sttp.tapir.*
@@ -26,8 +27,7 @@ final case class FragmentMetadata(
     totalItems: BigInt,
     exactTotal: Boolean,
     endpoint: Uri,
-    requestQuery: Option[String],
-    customPrefixes: Map[String, String]
+    requestQuery: Option[String]
 ):
   private val voidDataset = NodeFactory.createURI("http://rdfs.org/ns/void#Dataset")
   private val voidSubset = NodeFactory.createURI("http://rdfs.org/ns/void#subset")
@@ -147,12 +147,16 @@ final case class QuadPatternFragment(data: Seq[Quad], metadata: FragmentMetadata
   def toDatasetGraph: DatasetGraph =
     val dataset = DatasetGraphInMemory()
     dataset.prefixes().putAll(this.prefixMapping)
-    data.foreach(dataset.add)
+    // The union is the document's default graph rather than quads tagged with its IRI: stock Comunica discards tagged union rows from the
+    // second page of a fragment on, which truncates every bare pattern (docs/graph-semantics.md, "Test record, 2026-11-19").
+    data.foreach(quad =>
+      if QuadPatternFragment.UnionGraphs(quad.getGraph()) then dataset.getDefaultGraph().add(quad.asTriple()) else dataset.add(quad)
+    )
     metadata.toQuads.foreach(dataset.add)
     dataset
 
   def prefixMapping: PrefixMapping =
-    PrefixMappingImpl().setNsPrefixes((QuadPatternFragment.qpfPrefixes ++ metadata.customPrefixes).asJava)
+    PrefixMappingImpl().setNsPrefixes((Service.PrefixMap ++ QuadPatternFragment.ControlPrefixes).asJava)
 
 object QuadPatternFragment:
 
@@ -161,16 +165,25 @@ object QuadPatternFragment:
     */
   val UnionGraph = NodeFactory.createURI("urn:x-kgf:union")
 
+  /** The union's IRI, and the name this server advertised for it before adopting KGF's */
+  val UnionGraphs: Set[org.apache.jena.graph.Node] = Set(UnionGraph, NodeFactory.createURI("urn:ldf:defaultGraph"))
+
   val quadsPerPage = 100
 
-  val qpfPrefixes = Map(
-    "rdf" -> "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-    "rdfs" -> "http://www.w3.org/2000/01/rdf-schema#",
-    "owl" -> "http://www.w3.org/2002/07/owl#",
-    "xsd" -> "http://www.w3.org/2001/XMLSchema#",
-    "terms" -> "http://purl.org/dc/terms/",
+  /** The vocabularies this document's own hypermedia controls use, beside the dataset's published prefix map.
+    *
+    * The data terms are declared by `Service.Prefixes` and nothing else: one server declares one vocabulary, the same map the manifest
+    * publishes, that a request's CURIEs resolve against, and that every representation of every route abbreviates with. Only a document's
+    * own controls add to it, as the VoID document adds its own (`kgf.Void`).
+    *
+    * `dct`, `foaf` and `sd` are the OKN shared prefix table's names for these namespaces. `hydra` is not in that table, which is a table of
+    * the vocabularies the federation's graphs publish, and Hydra is this document's own hypermedia.
+    */
+  val ControlPrefixes = Map(
     "hydra" -> "http://www.w3.org/ns/hydra/core#",
-    "void" -> "http://rdfs.org/ns/void#"
+    "dct" -> "http://purl.org/dc/terms/",
+    "foaf" -> "http://xmlns.com/foaf/0.1/",
+    "sd" -> "http://www.w3.org/ns/sparql-service-description#"
   )
 
   final case class Parameters(
@@ -185,11 +198,9 @@ object QuadPatternFragment:
   def qpf(
       matches: Matches,
       params: Parameters,
-      customPrefixes: Map[String, String],
       endpoint: Uri,
       requestQuery: Option[String]
   ): QuadPatternFragment =
-    val metadata =
-      FragmentMetadata(params, quadsPerPage, matches.positions.size, matches.exact, endpoint, requestQuery, customPrefixes)
+    val metadata = FragmentMetadata(params, quadsPerPage, matches.positions.size, matches.exact, endpoint, requestQuery)
     val quads = matches.positions.drop(metadata.skip).iterator.take(quadsPerPage).flatten.toSeq
     QuadPatternFragment(quads, metadata)

@@ -4,6 +4,9 @@ import org.apache.jena.graph.NodeFactory
 import org.apache.jena.riot.Lang
 import org.apache.jena.riot.RDFParser
 import org.apache.jena.sparql.core.Quad
+import org.renci.frink.kgf.Service
+import org.renci.frink.qpf.Matches
+import org.renci.frink.qpf.QuadPatternFragment
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import sttp.client3.*
@@ -17,10 +20,11 @@ import scala.jdk.CollectionConverters.*
 class EndpointsSpec extends AnyFlatSpec with Matchers:
 
   private val backend = TapirStubInterpreter(SttpBackendStub.synchronous)
-    .whenServerEndpointRunLogic(Endpoints.qpfServerEndpoint)
+    .whenServerEndpointRunLogic(Endpoints.tpfServerEndpoint)
     .backend()
 
-  private def get(params: (String, String)*) = request(uri"http://test.com/qpf?$params")
+  private val route = s"/s2/v/${Service.Version}/tpf"
+  private def get(params: (String, String)*) = request(uri"http://test.com/s2/v/${Service.Version}/tpf?$params")
   private def request(url: Uri) = basicRequest.get(url).header("Accept", "application/n-quads").send(backend)
   private def quads(body: String) = RDFParser.fromString(body, Lang.NQUADS).toDatasetGraph().find().asScala.toSeq
   private def node(iri: String) = NodeFactory.createURI(iri)
@@ -37,7 +41,7 @@ class EndpointsSpec extends AnyFlatSpec with Matchers:
   private val yorkCell = "http://stko-kwg.geog.ucsb.edu/lod/resource/s2.level13.5525166171478818816"
   private val hasMetricArea = "http://www.opengis.net/ont/geosparql#hasMetricArea"
 
-  "The QPF endpoint" should "answer patterns with literal objects" in {
+  "The TPF route" should "answer patterns with literal objects" in {
     val response = get(
       "predicate" -> "http://stko-kwg.geog.ucsb.edu/lod/ontology/cellID",
       "object" -> "\"5525166171478818816\"^^http://www.w3.org/2001/XMLSchema#integer"
@@ -59,7 +63,7 @@ class EndpointsSpec extends AnyFlatSpec with Matchers:
 
   it should "answer only the quads compatible with bindings, describing the page by the URL requested" in {
     val url =
-      uri"http://test.com/qpf?subject=?s&predicate=$sfWithin&object=?o&graph=$level5&values=${s"(?o ?other) { (${level1Cells(0)} UNDEF) (${level1Cells(1)} 1) }"}"
+      uri"http://test.com/s2/v/${Service.Version}/tpf?subject=?s&predicate=$sfWithin&object=?o&graph=$level5&values=${s"(?o ?other) { (${level1Cells(0)} UNDEF) (${level1Cells(1)} 1) }"}"
     val response = request(url)
     response.code shouldBe StatusCode.Ok
     val found = quads(response.body.toOption.get)
@@ -67,7 +71,7 @@ class EndpointsSpec extends AnyFlatSpec with Matchers:
     data.map(_.getObject()).toSet.subsetOf(level1Cells.map(cell => node(cell.stripPrefix("<").stripSuffix(">"))).toSet) shouldBe true
     data.map(_.getPredicate()).toSet shouldBe Set(node(sfWithin))
     data should have size 100
-    val page = s"http://localhost:8080/qpf?${url.toString.dropWhile(_ != '?').drop(1)}"
+    val page = s"http://localhost:8080$route?${url.toString.dropWhile(_ != '?').drop(1)}"
     // the page is the only resource the fragment has as a subset, and it's how clients find the metadata
     metadata.filter(_.getObject() == node(page)).map(_.getPredicate()).toSet should contain(voidSubset)
     metadata.count(quad => quad.getPredicate() == voidSubset && quad.getObject() == node(page)) shouldBe 1
@@ -89,7 +93,8 @@ class EndpointsSpec extends AnyFlatSpec with Matchers:
 
   it should "fill the HTML form with bindings that can be submitted again" in {
     def html(params: (String, String)*) =
-      val response = basicRequest.get(uri"http://test.com/qpf?$params").header("Accept", "text/html").send(backend)
+      val response =
+        basicRequest.get(uri"http://test.com/s2/v/${Service.Version}/tpf?$params").header("Accept", "text/html").send(backend)
       response.code shouldBe StatusCode.Ok
       response.body.toOption.get
     def values(page: String) =
@@ -111,19 +116,34 @@ class EndpointsSpec extends AnyFlatSpec with Matchers:
     declared.map(_.getObject().getURI()) shouldBe Seq("urn:x-kgf:union")
     declared.foreach(_.getSubject().isBlank() shouldBe true)
     found.exists(quad =>
-      quad.getSubject() == node("http://localhost:8080/qpf#dataset") &&
+      quad.getSubject() == node(s"http://localhost:8080$route#dataset") &&
         quad.getPredicate() == node("http://www.w3.org/ns/sparql-service-description#defaultDataset") &&
         quad.getObject() == declared.head.getSubject()
     ) shouldBe true
   }
 
-  it should "answer the union with triples named by it, and other graphs with nothing" in {
+  it should "declare the vocabulary the manifest publishes, and nothing beside it but this document's controls" in {
+    val fragment = QuadPatternFragment.qpf(
+      Matches.of(Util.SizedIterator.empty),
+      QuadPatternFragment.Parameters(None, None, None, None, None, None),
+      uri"http://test.com/s2/v/${Service.Version}/tpf",
+      None
+    )
+    val declared = fragment.prefixMapping.getNsPrefixMap().asScala
+    for (prefix, namespace) <- Service.Prefixes do withClue(s"$prefix: ") { declared.get(prefix) shouldBe Some(namespace) }
+    // the empty prefix wrote kwg-ont terms as :sfTouches here while the KGF routes wrote kwg-ont:sfTouches
+    declared.keySet should not contain ""
+    declared.keySet.diff(Service.PrefixMap.keySet) shouldBe QuadPatternFragment.ControlPrefixes.keySet
+  }
+
+  it should "answer the union with untagged triples, and other graphs with nothing" in {
     def answer(graph: String) =
       val found = quads(get("subject" -> yorkCell, "predicate" -> sfTouches, "graph" -> graph).body.toOption.get)
       val total = found.find(_.getPredicate() == hydraTotalItems).get.getObject().getLiteralLexicalForm().toInt
       (found.filter(_.getPredicate().getURI() == sfTouches), total)
     val (union, unionTotal) = answer("urn:x-kgf:union")
-    union.map(_.getGraph().getURI()).toSet shouldBe Set("urn:x-kgf:union")
+    // untagged: stock Comunica drops tagged union rows from a fragment's second page on (docs/graph-semantics.md)
+    union.map(quad => Quad.isDefaultGraph(quad.getGraph())).toSet shouldBe Set(true)
     union should have size 8
     unionTotal shouldBe 8
     val (level, _) = answer("http://stko-kwg.geog.ucsb.edu/lod/resource/s2.level13")

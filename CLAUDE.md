@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-A [Quad Pattern Fragments](https://linkeddatafragments.org/specification/quad-pattern-fragments/) server that exposes the entire S2 Geometry cell hierarchy (levels 0–30, ~10^19 cells) as a virtual RDF dataset. No data is stored: every quad is computed on demand from the `s2-geometry` library. The vocabulary mirrors KnowWhereGraph / SAWGraph spatialkg (`kwg:`, `kwgont:`, `geo:`, `spatial-full:`). Live server: https://frink.apps.renci.org/s2/qpf
+A [Knowledge Graph Fragments](https://github.com/frink-okn/kgf) (KGF) server that exposes the entire S2 Geometry cell hierarchy (levels 0–30, ~10^19 cells, ~1.36 × 10^21 triples) as a virtual RDF dataset. No data is stored: every quad is computed on demand from the `s2-geometry` library, and every count is exact and in closed form. The vocabulary mirrors KnowWhereGraph / SAWGraph spatialkg (`kwg:`, `kwg-ont:`, `geo:`, `spatial-full:`). Live server: https://frink.apps.renci.org/s2/
+
+This is a **computed graph** in KGF's terms (`../kgf` doc 05 §5.8): it speaks KGF because it can honor the cost contract, not because it holds a bundle. [`docs/kgf.md`](docs/kgf.md) is the contract this server meets — the URL space, the identity of a release, the capabilities it declares and refuses, the cursors, the caps, and every place it diverges from doc 03 and why. Change that document before changing the surface.
 
 ## Commands
 
@@ -18,21 +20,34 @@ scala-cli --power test . --test-only 'org.renci.frink.s2.S2GraphSpec' -- -z "cou
 scala-cli --power fmt --check .                    # scalafmt check (drop --check to fix); maxColumn 140
 scala-cli --power run .                            # serve on http://localhost:8080/qpf
 scala-cli --power package . -o s2-qpf              # launcher executable
-node interop/comunica/test.mjs http://localhost:8080/qpf  # Comunica 5.3.0 conformance against a running server (npm ci --prefix interop/comunica first)
+node interop/comunica/test.mjs http://localhost:8080/s2/v/v2.0.0/tpf  # Comunica 5.3.0 conformance against a running server (npm ci --prefix interop/comunica first)
 ```
 
-Runtime env vars: `HTTP_PORT` (default 8080) and `QPF_SERVER_LOCATION` (public base URL used to build Hydra links/paging URIs; default `http://localhost:8080`, `/qpf` is appended).
+Runtime env vars: `HTTP_PORT` (default 8080), `KGF_PUBLIC_BASE` (the base every emitted link carries; default `http://localhost:8080`) and `KGF_CONTENT_DIGEST` (the release's content digest, where the deployment knows the container image digest; otherwise the server hashes its own classpath). `publish.version` in `project.scala` is the dataset's release — `kgf.Service.Release` must match it, which `ServiceSpec` checks.
 
 Publishing a GitHub release triggers `.github/workflows/publish-docker-image.yml`, which builds a Docker image with `scala-cli --power package --docker` and pushes to ghcr.io.
 
 ## Architecture
 
-Request flow (`src/main/scala/org/renci/frink`):
+Two routes answer over one graph (`src/main/scala/org/renci/frink`): the KGF operations in `kgf/`, and the TPF/brTPF compatibility route in `Endpoints.scala`. `Endpoints.all` assembles every route in matching order and `Main` serves it (tapir, Netty sync server under Ox).
 
-1. `Endpoints.qpfServerEndpoint` (tapir, served by Netty sync server under Ox in `Main`) parses `subject`/`predicate`/`object`/`graph` into `Types.Term` using the Hydra explicit representation (`"lex"@lang`, `"lex"^^dt`, `?var`, bare IRI; blank nodes rejected, literals only allowed as object). Unbound terms become Jena variables in a `Quad` pattern; named variables keep their names because brTPF bindings refer to them. An optional `values` parameter is parsed into `qpf.Bindings`.
-2. `s2.S2Graph.quads(pattern)` returns `Either[String, SizedIterator[Quad]]`, or with bindings `S2Graph.quads(pattern, bindings)` returns `Either[String, Matches]`. A `Left` means the pattern can't be answered and becomes **501 Not Implemented** — the server must never claim "no matches" for something it simply can't compute.
+**The KGF route** (`kgf/Endpoints.scala`; `docs/kgf.md`):
+
+1. Parameters are read from the `ServerRequest` rather than declared one by one, because an operation takes up to a dozen of them and the negotiation, the caps and the cursor are shared. Terms are KGF doc 03 §3.3 syntax — `<iri>`, a CURIE against `Service.Prefixes`, `"lex"@lang`, `"lex"^^dt`, `?var` — parsed by `kgf.Term`.
+2. `kgf.Operations.PatternRequest` holds the parsed pattern, the `g` scope (union, a named graph, or `*` for the quad view) and the object filters. `o.dt` becomes a predicate restriction, exactly, because each predicate here has one object datatype; `o.lang` matches nothing. The restriction is kept apart from the pattern the client sent, so a row still carries the position the client left unbound.
+3. `Operations.quads` calls `S2Graph.quads` and turns a `Left` into `501 pattern_not_supported`. Bindings go through `Operations.restricted`, which answers one row per (input row, quad) with a `binding` column, so nothing is deduplicated and the cardinality is exactly the sum of the per-row counts.
+4. A page is a position: `Cursor` encodes it with a fingerprint of (content digest, operation, canonical request), and anything else is `400 stale_cursor`. `Envelopes` builds the JSON, `Rdf` the RDF representations (the union untagged, a scope tagged, the quad view tagged per row), `Html` the HTML view of the same JSON.
+5. `kgf.Model` is the closed-form description model every statistic comes from — `/manifest` counts, `/void` (`kgf.Void`), `/schema` (`kgf.Schema`), `/summary` (`kgf.Descriptors`). Each number is the size of the pattern that answers the matching `/count`, which is how doc 04's invariant holds by construction; `ModelSpec` checks each against that pattern. `kgf.Inventory` answers `/terms` in closed form over the cell-id progressions.
+6. Errors are RFC 9457 problems with doc 03 §3.6.1's closed code set (`kgf.Problem`), whatever the client asked to accept.
+
+**The TPF route** (`/{dataset}/v/{version}/tpf`):
+
+1. `Endpoints.tpfServerEndpoint` parses `subject`/`predicate`/`object`/`graph` into `Types.Term` using the Hydra explicit representation (bare IRIs, not bracketed; blank nodes rejected, literals only as object). It declares no prefixes of its own: `kgf.Service.Prefixes` is the one vocabulary this server declares — the manifest's, and the OKN shared table's — and `QuadPatternFragment.ControlPrefixes` adds only this document's hypermedia (`hydra`, `dct`, `foaf`, `sd`). Unbound terms become Jena variables in a `Quad` pattern; named variables keep their names because brTPF bindings refer to them. An optional `values` parameter is parsed into `qpf.Bindings`.
+2. `S2Graph.quads(pattern)` returns `Either[String, SizedIterator[Quad]]`, or with bindings `S2Graph.quads(pattern, bindings)` returns `Either[String, Matches]`. A `Left` becomes **501 `pattern_not_supported`** — the server must never claim "no matches" for something it simply can't compute.
 3. `qpf.QuadPatternFragment.qpf` drops `(page-1) * 100` positions and takes 100, and `FragmentMetadata` adds the Hydra/VoID control quads (total count, first/prev/next links, search template) in a metadata graph.
-4. Tapir content negotiation serializes via Jena to TriG, N-Quads, or JSON-LD, or to HTML via `qpf.WebUI` (scalatags). The `from*` decoders in `Types.DatasetGraphUtils` are intentionally `???`; only encoding is used.
+4. Tapir content negotiation serializes via Jena to TriG, N-Quads, or JSON-LD, or to HTML via `qpf.WebUI` (scalatags), which builds its page in `kgf.Html.page` — the shell and stylesheet **every** resource of this server shares, so one server does not look like two sites. Nothing is loaded from a CDN. Union rows are written into the document's default graph, not tagged with the union IRI — see `docs/graph-semantics.md`. The `from*` decoders in `Types.DatasetGraphUtils` are intentionally `???`; only encoding is used.
+
+A tapir endpoint that does not declare a path input matches **every** path, so each route checks `request.pathSegments` for the shape it serves and the catch-all (`kgf.Endpoints.unmatched`, last in the list) answers the service descriptor for `/`, a coded `405` with `Allow` for a known operation under another method, and a coded `404` otherwise.
 
 ### SizedIterator: why paging works over an effectively infinite graph
 
@@ -63,7 +78,10 @@ Comunica compatibility depends on details that are easy to break:
 [`docs/graph-semantics.md`](docs/graph-semantics.md) states the named-graph contract
 shared with KGF (union default graph, the two reserved graph IRIs, what each `graph=`
 request returns and how its quads are tagged), with the Comunica tests behind it and how
-this server implements it. Change the contract there before changing the code.
+this server implements it. Change the contract there before changing the code. Union rows
+are served **untagged** on the TPF route: stock Comunica discards tagged union rows from a
+fragment's second page on, which truncated every bare pattern at 100 rows on the deployed
+server — the measurement is in that document.
 
 ### S2Graph data model
 

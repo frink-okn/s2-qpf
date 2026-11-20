@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { QueryEngine } from '@comunica/query-sparql';
 
 const endpoint = process.argv[2];
-assert(endpoint, 'usage: node test.mjs http://localhost:8080/qpf');
+assert(endpoint, 'usage: node test.mjs http://localhost:8080/s2/v/v2.0.0/tpf');
 
 const resource = 'http://stko-kwg.geog.ucsb.edu/lod/resource/';
 const ontology = 'http://stko-kwg.geog.ucsb.edu/lod/ontology/';
@@ -44,7 +44,14 @@ const touchesYork = `<${york}> <${ontology}sfTouches> ?o`;
 const bare = await rows(`SELECT * WHERE { ${touchesYork} }`, ['o']);
 assert.equal(bare.length, 8, 'a pattern outside any GRAPH must read the union');
 assert(requested.some(url => url.searchParams.get('graph') === 'urn:x-kgf:union'), 'Comunica must request the declared union');
-assert.equal((await rows(`SELECT * WHERE { GRAPH <urn:x-kgf:union> { ${touchesYork} } }`, ['o'])).length, 8, 'the union can be named');
+// Union rows are untagged, so stock Comunica reads nothing through the union's own IRI: only a fragment's first page is filtered by
+// QuerySourceQpf, and tagging them would truncate every bare pattern at one page (docs/graph-semantics.md). The bare pattern above is
+// what must work, and `g=<urn:x-kgf:union>` on the KGF /fragment route is where naming the union reads it.
+assert.equal((await rows(`SELECT * WHERE { GRAPH <urn:x-kgf:union> { ${touchesYork} } }`, ['o'])).length, 0, 'the union is not named on this route');
+
+// The case the tagging correction exists for: a bare pattern whose fragment is four pages
+const typed = await rows(`SELECT * WHERE { ?s a <${ontology}S2Cell_Level3> }`, ['s']);
+assert.equal(typed.length, 384, 'a bare pattern must page to the end of its fragment, not stop after the first page');
 const named = await rows(`SELECT * WHERE { GRAPH ?g { ${touchesYork} } }`, ['g', 'o']);
 assert.deepEqual(new Set(named.map(row => row.g)), new Set([`${resource}s2.level13`]), 'GRAPH ?g must list level graphs');
 assert.deepEqual(new Set(named.map(row => row.o)), new Set(bare.map(row => row.o)));

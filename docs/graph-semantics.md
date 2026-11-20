@@ -27,7 +27,7 @@ The contract is the union-default convention of QLever, RDF4J/GraphDB, and Blaze
 | `graph=` | Data quads in the page | `hydra:totalItems` |
 |---|---|---|
 | absent, or a variable such as `?g` (what `brtpf` sends) | every matching quad, each tagged with its level graph | all matching quads |
-| `urn:x-kgf:union` | every matching triple once, **tagged `urn:x-kgf:union`** | distinct triples, here the same number |
+| `urn:x-kgf:union` | every matching triple once, **untagged**: in the document's default graph | distinct triples, here the same number |
 | a level graph | that level's matching quads, tagged with it | that level's count |
 | `urn:x-kgf:unnamed` | none | 0 |
 | any other IRI | none | 0 |
@@ -46,14 +46,30 @@ blank node. `<dataset> sd:defaultGraph …` never qualifies here, because the da
 `void:subset` is the `…#fragment` resource, not the page. Without a declaration Comunica
 treats the default graph as empty and makes no request at all for a bare pattern.
 
-**Why union rows are tagged with the union IRI rather than left untagged.** Comunica sends
-the identical request, `graph=urn:x-kgf:union`, in two situations and filters the answer
+**Why union rows are untagged, which is a correction (2026-11-19).** Comunica sends the
+identical request, `graph=urn:x-kgf:union`, in two situations and filters the answer
 differently: for a bare pattern (after substituting the declared default graph) it keeps
 rows tagged with that IRI *or* untagged, mapping both to the SPARQL default graph; for an
 explicit `GRAPH <urn:x-kgf:union>` it keeps only rows tagged with that IRI. The server
-cannot tell the two apart, so tagged rows are the only answer that satisfies both.
-Rule 3 still holds: `GRAPH ?g` patterns are requested with the graph unset or as a
-variable, never as the union IRI, so union-tagged rows never reach them.
+cannot tell the two apart. This server first chose tagged rows as the only answer that
+satisfies both — and that is wrong, because only the **first** page of a fragment is
+filtered that way. Every later page is identified as a plain RDF document and matched by
+`QuerySourceRdfJs` against the pattern's own graph term, the default graph, which knows
+nothing of the `sd:defaultGraph` declaration; tagged rows are discarded there. The test
+record below measures it: a bare pattern with 384 matches returned 100 rows, its first
+page, against the deployed server.
+
+So the bare pattern — the query every client sends — is what the tagging has to serve,
+and untagged rows page to the end. The cost is that **stock Comunica reads nothing
+through `GRAPH <urn:x-kgf:union>`**, on any page. Rule 2 is unaffected for a client that
+speaks KGF: `g=<urn:x-kgf:union>` on the KGF `/fragment` route returns the union, and
+`kgf-sparql`'s native source maps `GRAPH <urn:x-kgf:union>` to it. The idiom belongs to
+KGF's own API, not to the Hydra form. Rule 3 still holds: `GRAPH ?g` patterns are
+requested with the graph unset or as a variable, never as the union IRI.
+
+`kgf-rs` reached the same conclusion from the same code on 2026-09-17 (`../kgf-rs
+notes/graphs.md`), traced against one-row pages, and serves untagged union rows today.
+This server is the one that was still tagging.
 
 **Comunica's `unionDefaultGraph` context flag stays off** because it is unnecessary: once
 a default graph is declared, Comunica requests it for bare patterns instead of consulting
@@ -79,18 +95,37 @@ rows, the neighbours of one level-13 cell: bare `<cell> sfTouches ?o`; the same 
 | C. B, union rows untagged | 8 | 8 | 8 | **0** |
 | D. B, union rows tagged `urn:x-kgf:union` | 8 | 8 | 8 | **8** |
 
-Variant D is the contract. With the flag on, variant C returned the same results for the
-bare, `GRAPH ?g`, and bare-join queries, and `{ bare } UNION { GRAPH ?g { … } }`, run as
-`qpf`, returned 16 rows with `?g` bound in 8 against both C and D. A bare query followed by
-`SELECT DISTINCT ?g { GRAPH ?g { … } }` on one `brtpf` engine with a shared cache listed
-only `s2.level13` (variant D).
+Variant D was taken as the contract. With the flag on, variant C returned the same results
+for the bare, `GRAPH ?g`, and bare-join queries, and `{ bare } UNION { GRAPH ?g { … } }`,
+run as `qpf`, returned 16 rows with `?g` bound in 8 against both C and D. A bare query
+followed by `SELECT DISTINCT ?g { GRAPH ?g { … } }` on one `brtpf` engine with a shared
+cache listed only `s2.level13` (variant D).
 
-The implementation passes `interop/comunica/test.mjs`, which checks all of these with no
-context flags: bare patterns and a bare brTPF join read the union and request
-`graph=urn:x-kgf:union`, `GRAPH <urn:x-kgf:union>` returns the bare rows,
-`GRAPH <urn:x-kgf:unnamed>` returns none, `GRAPH ?g` lists only level graphs even after the
-same engine has cached the union, and metadata never appears as data, inside or outside
-`GRAPH`.
+**Every query in that record returns 8 rows, which is one page.** That is what the record
+missed, and the reason it chose wrongly.
+
+## Test record, 2026-11-19
+
+Against the deployed server, `https://frink.apps.renci.org/s2/qpf`, serving variant D,
+through `@comunica/query-sparql` 5.3.0 with no context flags.
+`?s rdf:type kwg-ont:S2Cell_Level3` has 384 matches: four pages of 100.
+
+| Query | `brtpf` | `qpf` | Expected |
+|---|---|---|---|
+| bare `?s a kwg-ont:S2Cell_Level3` | **100** | **100** | 384 |
+| the same inside `GRAPH ?g` | 384 | 384 | 384 |
+
+A bare pattern reads one page and stops: every row after the first page is discarded,
+silently, for any pattern with more than 100 matches. Variant C is the contract, and
+`GRAPH <urn:x-kgf:union>` is given up on the Hydra route in exchange (above).
+
+`interop/comunica/test.mjs` checks all of this with no context flags: bare patterns and a
+bare brTPF join read the union and request `graph=urn:x-kgf:union`; a bare pattern that
+spans four pages returns all 384 rows, which is the case this correction exists for;
+`GRAPH <urn:x-kgf:union>` returns nothing through stock Comunica, by the trade above;
+`GRAPH <urn:x-kgf:unnamed>` returns none; `GRAPH ?g` lists only level graphs even after
+the same engine has cached the union; and metadata never appears as data, inside or
+outside `GRAPH`.
 
 ## Implementation
 
@@ -101,13 +136,13 @@ neither, Comunica can't match page metadata to the page it fetched at all.
 | Contract | Before | Now |
 |---|---|---|
 | default graph declared on a blank node under `sd:defaultDataset` | `<dataset> sd:defaultGraph <urn:ldf:defaultGraph>`, which Comunica ignored | `QuadPatternFragment` declares `QuadPatternFragment.UnionGraph` (`urn:x-kgf:union`) in the blank-node shape |
-| `graph=<union>` returns each triple once, tagged `urn:x-kgf:union` | rows tagged with their level graphs | `S2Graph.quads(pattern)`: `urn:x-kgf:union`, and `urn:ldf:defaultGraph` as an alias (`S2Graph.UnionGraphs`), match every level, with rows retagged as the union |
+| `graph=<union>` returns each triple once, untagged (tagged until 2026-11-19) | rows tagged with their level graphs | `S2Graph.quads(pattern)`: `urn:x-kgf:union`, and `urn:ldf:defaultGraph` as an alias (`S2Graph.UnionGraphs`), match every level; the `/tpf` route writes the rows into the document's default graph, and the KGF `/fragment` route reports the union in its `g` column |
 | any IRI other than a level graph or the union matches nothing | `S2Graph.quads(pattern)` matched every level for any non-level graph (`toS2Level(...).getOrElse(Levels)`), and `S2Graph.quads(pattern, bindings)` turned a non-level graph in the pattern into a variable matching every level | a graph that is neither a variable, a level graph, nor the union gives an empty fragment with total 0, including `urn:x-kgf:unnamed` and levels past 30, and never a 501 |
 | a union pattern with bindings returns each triple once | see the row above | `S2Graph.quads(pattern, bindings)` matches the rows with the graph as a variable, so repeated quads are removed while they are still in their level graphs, and then retags the answer as the union |
 | a brTPF row binding `?g` to anything but a level graph matches nothing | already right for non-level graphs | still right, and a row binding `?g` to the union IRI or its alias also matches nothing |
 | `graph` unbound or a variable: tagged per level, total = quad count | same | unchanged |
 | `GRAPH ?g` lists level graphs only | same | unchanged |
-| HTML view links graph names | links each row's graph | unchanged; union rows link to `graph=urn:x-kgf:union` |
+| HTML view links graph names | links each row's graph | unchanged; a union row has no graph to link |
 
 Tests added or changed:
 
@@ -121,9 +156,11 @@ Tests added or changed:
   the unnamed graph, and another IRI, with totals.
 - `interop/comunica/test.mjs`: the Comunica checks listed in the test record.
 
-## If this server grows a KGF-style API
+## The same contract on the KGF route
 
-The same contract, in KGF's parameter forms on `/fragment` and `/count`:
+This server now serves the KGF API as well; [`kgf.md`](kgf.md) is that surface in full.
+Graph scoping there is this contract in KGF's parameter forms on `/fragment` and
+`/count`:
 
 | `g` | Meaning here |
 |---|---|
@@ -134,3 +171,7 @@ The same contract, in KGF's parameter forms on `/fragment` and `/count`:
 
 Exact counts for every form already exist: `SizedIterator` sizes are exact and
 `drop` is positional, so a KGF cursor can be a page position.
+
+The namespace inventory a federation index needs from a graph that can publish no
+membership filters — complete, and countable in closed form for any prefix — is
+[`kgf.md`](kgf.md) §10, with the arithmetic that answers it.
