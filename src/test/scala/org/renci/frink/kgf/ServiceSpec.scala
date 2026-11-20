@@ -21,18 +21,28 @@ class ServiceSpec extends AnyFlatSpec with Matchers:
   }
 
   "The prefix map" should "declare what the OKN shared prefix table declares" in {
-    val table = Paths.get("../okn-registry/docs/registry/prefixes.yaml")
-    assume(Files.exists(table), "the okn-registry checkout is beside this one")
-    val entry = """^([A-Za-z0-9_.-]+):\s*"([^"]+)"""".r
-    val shared = String(Files.readAllBytes(table), "UTF-8").linesIterator
-      .flatMap(entry.findFirstMatchIn)
-      .map(found => found.group(1) -> found.group(2))
-      .toMap
-    for (prefix, namespace) <- Service.Prefixes do withClue(s"$prefix: ") { shared.get(prefix) shouldBe Some(namespace) }
-    // hydra is the TPF document's own hypermedia vocabulary, which no graph of the federation publishes
-    for (prefix, namespace) <- org.renci.frink.qpf.QuadPatternFragment.ControlPrefixes - "hydra" do
-      withClue(s"$prefix: ") { shared.get(prefix) shouldBe Some(namespace) }
+    // The registry is a sibling checkout here and is absent in CI, where this checks nothing rather than failing the build: scala-cli's
+    // runner reports a cancelled test as a failed run, so `assume` turned an absent file into a red build (run 44769940519).
+    checkAgainst(Paths.get("../okn-registry/docs/registry/prefixes.yaml"))
   }
+
+  it should "check nothing, rather than fail, where the registry is not checked out beside this one" in {
+    checkAgainst(Paths.get("../okn-registry-that-is-not-here/prefixes.yaml"))
+  }
+
+  private def checkAgainst(table: java.nio.file.Path): org.scalatest.Assertion =
+    if !Files.exists(table) then succeed
+    else
+      val entry = """^([A-Za-z0-9_.-]+):\s*"([^"]+)"""".r
+      val shared = String(Files.readAllBytes(table), "UTF-8").linesIterator
+        .flatMap(entry.findFirstMatchIn)
+        .map(found => found.group(1) -> found.group(2))
+        .toMap
+      for (prefix, namespace) <- Service.Prefixes do withClue(s"$prefix: ") { shared.get(prefix) shouldBe Some(namespace) }
+      // hydra is the TPF document's own hypermedia vocabulary, which no graph of the federation publishes
+      for (prefix, namespace) <- org.renci.frink.qpf.QuadPatternFragment.ControlPrefixes - "hydra" do
+        withClue(s"$prefix: ") { shared.get(prefix) shouldBe Some(namespace) }
+      succeed
 
   "The caps" should "set the level an area lookup is refused below" in {
     // the deepest level whose cells fit the published candidate budget
